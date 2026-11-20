@@ -1,0 +1,39 @@
+<resources>
+    <string name="app_name">Narendra Call Recorder</string>
+    <string name="app_tagline">Call &amp; Voice Studio</string>
+    <string name="developer_credit">Developed by Narendra</string>
+
+    <!-- Navigation -->
+    <string name="nav_home">Dashboard</string>
+    <string name="nav_recordings">Recordings</string>
+    <string name="nav_settings">Settings</string>
+
+    <!-- Recording Status & Controls -->
+    <string name="status_idle">Standby</string>
+    <string name="status_recording">Recording Live</string>
+    <string name="status_paused">Paused</string>
+    <string name="status_monitoring">Auto-Call Monitor Active</string>
+    <string name="action_start_recording">Start Recording</string>
+    <string name="action_pause">Pause</string>
+    <string name="action_resume">Resume</string>
+    <string name="action_stop">Stop &amp; Save</string>
+
+    <!-- Notifications -->
+    <string name="notif_channel_recording_name">Active Recording</string>
+    <string name="notif_channel_recording_desc">Shows live status and controls while recording audio</string>
+    <string name="notif_channel_monitor_name">Call Monitor &amp; Alerts</string>
+    <string name="notif_channel_monitor_desc">Shows auto-recording standby status and Android restriction alerts</string>
+    <string name="notif_recording_title">Recording in Progress</string>
+    <string name="notif_recording_paused">Recording Paused</string>
+    <string name="notif_saved_title">Recording Saved</string>
+    <string name="notif_bg_restricted_title">Tap to Start Call Recording</string>
+    <string name="notif_bg_restricted_body">Android 10+ background mic restrictions prevent silent auto-start. Tap here to start recording.</string>
+
+    <!-- Consent & Compatibility -->
+    <string name="consent_title">Call Recording Consent &amp; Transparency</string>
+    <string name="consent_body">1. Two-Way Audio Reality: Starting with Android 10, standard third-party apps cannot capture both sides of a cellular voice call unless privileged system permissions are granted by the device manufacturer. On standard devices, this app records via your microphone (capturing your voice, and the caller only if loudspeaker is audible).\n\n2. Legal &amp; Privacy Notice: Never record conversations secretly. Always inform call participants and comply with local wiretapping/consent laws before recording.\n\n3. Local-Only Storage: Your audio files stay strictly on your device unless you explicitly export or share them.</string>
+    <string name="consent_accept">I Understand &amp; Agree</string>
+
+    <!-- Share / FileProvider -->
+    <string name="share_recording_title">Share Recording</string>
+</resources>

@@ -1,0 +1,6 @@
+{
+  "name": "Narendra Call Recorder",
+  "description": "Call and voice recorder with honest two-way capability detection, M4A/AAC/WAV recording, call state monitoring, playback manager, and privacy lock.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
