@@ -4,16 +4,22 @@ import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
 import android.util.Log
+import androidx.credentials.ClearCredentialStateRequest
+import androidx.credentials.CredentialManager
+import androidx.credentials.CustomCredential
+import androidx.credentials.GetCredentialRequest
+import androidx.credentials.exceptions.GetCredentialCancellationException
+import androidx.credentials.exceptions.GetCredentialException
+import androidx.credentials.exceptions.NoCredentialException
 import com.example.R
+import com.google.android.libraries.identity.googleid.GetGoogleIdOption
+import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
+import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
+import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential.Companion.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL
 import com.google.firebase.Firebase
-import com.google.firebase.FirebaseException
-import com.google.firebase.FirebaseTooManyRequestsException
 import com.google.firebase.auth.FirebaseAuth
-import com.google.firebase.auth.FirebaseAuthInvalidCredentialsException
 import com.google.firebase.auth.FirebaseUser
-import com.google.firebase.auth.PhoneAuthCredential
-import com.google.firebase.auth.PhoneAuthOptions
-import com.google.firebase.auth.PhoneAuthProvider
+import com.google.firebase.auth.GoogleAuthProvider
 import com.google.firebase.auth.auth
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -24,9 +30,9 @@ import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
-import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.withTimeoutOrNull
 
-private const val AUTH_TAG = "PhoneAuth"
+private const val AUTH_TAG = "Auth"
 private const val MISSING_CONFIG_PLACEHOLDER = "missing-google-services-json"
 
 private tailrec fun Context.findActivity(): Activity? = when (this) {
@@ -43,155 +49,121 @@ fun FirebaseAuth.authStateFlow(): Flow<FirebaseUser?> = callbackFlow {
     awaitClose { removeAuthStateListener(listener) }
 }
 
-/**
- * Formats a country code + raw mobile number into E.164 format (e.g. "+919876543210"),
- * or returns null if invalid.
- */
-fun formatE164PhoneNumber(countryCodeInput: String, phoneInput: String): String? {
-    val cleanedDigits = phoneInput.filter { it.isDigit() }
-    val trimmedInput = phoneInput.trim()
-    if (trimmedInput.startsWith("+") && cleanedDigits.length in 10..15) {
-        return "+$cleanedDigits"
-    }
-    val ccDigits = countryCodeInput.filter { it.isDigit() }.ifBlank { "91" }
-    if (cleanedDigits.length < 7 || cleanedDigits.length > 13) return null
-    val combined = "+$ccDigits$cleanedDigits"
-    val totalDigits = combined.count { it.isDigit() }
-    return if (totalDigits in 10..15) combined else null
-}
-
-private fun checkFirebaseConfigured(context: Context): String? {
-    val projectId = try {
-        context.getString(R.string.project_id)
-    } catch (_: Exception) {
-        ""
-    }
-    if (projectId.isBlank() || projectId == MISSING_CONFIG_PLACEHOLDER) {
-        return "Firebase is not configured in this APK (missing google-services.json). Add GOOGLE_SERVICES_JSON secret in GitHub or generate the APK from AI Studio."
-    }
-    return null
-}
-
-fun sendPhoneOtp(
+fun attemptAutoSignIn(
     context: Context,
-    e164PhoneNumber: String,
+    credentialManager: CredentialManager,
     scope: CoroutineScope,
-    resendToken: PhoneAuthProvider.ForceResendingToken? = null,
-    onCodeSent: (verificationId: String, token: PhoneAuthProvider.ForceResendingToken) -> Unit,
-    onAutoVerified: () -> Unit,
-    onError: (String) -> Unit
+    onAuthSuccess: () -> Unit,
+    onUnauthenticated: () -> Unit
 ) {
-    val configError = checkFirebaseConfigured(context)
-    if (configError != null) {
-        onError(configError)
+    if (Firebase.auth.currentUser != null) {
+        onAuthSuccess()
         return
     }
-    val activity = context.findActivity()
-    if (activity == null) {
-        onError("Unable to start phone verification from this context.")
+    val clientId = try {
+        context.getString(R.string.default_web_client_id)
+    } catch (_: Exception) {
+        onUnauthenticated()
         return
     }
-
-    val callbacks = object : PhoneAuthProvider.OnVerificationStateChangedCallbacks() {
-        override fun onVerificationCompleted(credential: PhoneAuthCredential) {
-            scope.launch {
-                try {
-                    Firebase.auth.signInWithCredential(credential).await()
-                    onAutoVerified()
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    Log.e(AUTH_TAG, "Auto-verification sign-in failed", e)
-                    onError(e.localizedMessage ?: "Verification failed. Please try entering the OTP.")
-                }
-            }
-        }
-
-        override fun onVerificationFailed(e: FirebaseException) {
-            Log.e(AUTH_TAG, "Phone verification failed", e)
-            val msg = when (e) {
-                is FirebaseAuthInvalidCredentialsException ->
-                    "Invalid mobile number. Please check the country code and mobile number."
-                is FirebaseTooManyRequestsException ->
-                    "Too many OTP attempts. Please wait a bit and try again."
-                else -> {
-                    val raw = e.message.orEmpty()
-                    if (raw.contains("OPERATION_NOT_ALLOWED", ignoreCase = true) ||
-                        raw.contains("not enabled", ignoreCase = true)
-                    ) {
-                        "Phone OTP login is not enabled in Firebase Console yet. Enable Authentication > Sign-in method > Phone for project gen-lang-client-0894883542."
-                    } else {
-                        e.localizedMessage ?: "Could not send OTP. Check internet connection and try again."
-                    }
-                }
-            }
-            onError(msg)
-        }
-
-        override fun onCodeSent(
-            verificationId: String,
-            token: PhoneAuthProvider.ForceResendingToken
-        ) {
-            onCodeSent(verificationId, token)
-        }
-    }
-
-    val builder = PhoneAuthOptions.newBuilder(Firebase.auth)
-        .setPhoneNumber(e164PhoneNumber)
-        .setTimeout(60L, TimeUnit.SECONDS)
-        .setActivity(activity)
-        .setCallbacks(callbacks)
-
-    if (resendToken != null) {
-        builder.setForceResendingToken(resendToken)
-    }
-
-    try {
-        PhoneAuthProvider.verifyPhoneNumber(builder.build())
-    } catch (e: Exception) {
-        Log.e(AUTH_TAG, "Failed to initiate verifyPhoneNumber", e)
-        onError(e.localizedMessage ?: "Failed to start OTP verification.")
-    }
-}
-
-fun verifyPhoneOtp(
-    verificationId: String,
-    otpCode: String,
-    scope: CoroutineScope,
-    onSuccess: () -> Unit,
-    onError: (String) -> Unit
-) {
-    val cleanOtp = otpCode.filter { it.isDigit() }
-    if (cleanOtp.length != 6) {
-        onError("Please enter the 6-digit OTP code.")
+    if (clientId.isBlank() || clientId == MISSING_CONFIG_PLACEHOLDER) {
+        onUnauthenticated()
         return
     }
+    val googleIdOption = GetGoogleIdOption.Builder()
+        .setFilterByAuthorizedAccounts(true)
+        .setServerClientId(clientId)
+        .setAutoSelectEnabled(true)
+        .build()
+    val request = GetCredentialRequest.Builder()
+        .addCredentialOption(googleIdOption)
+        .build()
     scope.launch {
         try {
-            val credential = PhoneAuthProvider.getCredential(verificationId, cleanOtp)
-            Firebase.auth.signInWithCredential(credential).await()
-            onSuccess()
+            val activityContext = context.findActivity() ?: context
+            val response = withTimeoutOrNull(2500L) {
+                credentialManager.getCredential(activityContext, request)
+            }
+            val cred = response?.credential
+            if (cred is CustomCredential && cred.type == TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
+                val token = GoogleIdTokenCredential.createFrom(cred.data).idToken
+                Firebase.auth.signInWithCredential(GoogleAuthProvider.getCredential(token, null)).await()
+                onAuthSuccess()
+            } else {
+                onUnauthenticated()
+            }
         } catch (e: CancellationException) {
             throw e
-        } catch (e: FirebaseAuthInvalidCredentialsException) {
-            Log.w(AUTH_TAG, "Invalid OTP entered: ${e.message}")
-            onError("Invalid OTP code. Please check the SMS and try again.")
+        } catch (_: Exception) {
+            onUnauthenticated()
+        }
+    }
+}
+
+fun onGoogleSignInClicked(
+    context: Context,
+    credentialManager: CredentialManager,
+    scope: CoroutineScope,
+    onAuthSuccess: () -> Unit,
+    onAuthError: (String) -> Unit,
+    onAuthCancelled: () -> Unit = {}
+) {
+    val clientId = try {
+        context.getString(R.string.default_web_client_id)
+    } catch (_: Exception) {
+        onAuthError("Google Sign-In configuration missing: default_web_client_id not found")
+        return
+    }
+    if (clientId.isBlank() || clientId == MISSING_CONFIG_PLACEHOLDER) {
+        onAuthError("Google Sign-In is not configured in this APK (missing google-services.json). Add GOOGLE_SERVICES_JSON secret in GitHub Settings -> Secrets -> Actions and rebuild.")
+        return
+    }
+    val signInOption = GetSignInWithGoogleOption.Builder(serverClientId = clientId).build()
+    val request = GetCredentialRequest.Builder()
+        .addCredentialOption(signInOption)
+        .build()
+    scope.launch {
+        try {
+            val activityContext = context.findActivity() ?: context
+            val cred = credentialManager.getCredential(activityContext, request).credential
+            if (cred is CustomCredential && cred.type == TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
+                val token = GoogleIdTokenCredential.createFrom(cred.data).idToken
+                Firebase.auth.signInWithCredential(GoogleAuthProvider.getCredential(token, null)).await()
+                onAuthSuccess()
+            } else {
+                onAuthError("Unexpected credential type received.")
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: GetCredentialCancellationException) {
+            Log.w(AUTH_TAG, "Google Sign-In flow cancelled or dismissed: ${e.message}", e)
+            onAuthCancelled()
+        } catch (e: NoCredentialException) {
+            Log.w(AUTH_TAG, "No Google credential available on device: ${e.message}", e)
+            onAuthError("No Google account found on this device. Please add a Google account in Settings > Accounts and try again.")
+        } catch (e: GetCredentialException) {
+            Log.e(AUTH_TAG, "Credential Manager error: ${e.type} - ${e.message}", e)
+            onAuthError(e.errorMessage?.toString() ?: e.localizedMessage ?: "Google Sign-In failed (${e.type}).")
         } catch (e: Exception) {
-            Log.e(AUTH_TAG, "OTP sign-in failed", e)
-            onError(e.localizedMessage ?: "OTP verification failed. Please try again.")
+            Log.e(AUTH_TAG, "Google Sign-In failed", e)
+            onAuthError(e.localizedMessage ?: "Sign in failed. Please try again.")
         }
     }
 }
 
 fun signOut(
+    credentialManager: CredentialManager,
     scope: CoroutineScope,
     onSignOutComplete: () -> Unit = {}
 ) {
     scope.launch {
         withContext(NonCancellable) {
             try {
-                Firebase.auth.signOut()
+                credentialManager.clearCredentialState(ClearCredentialStateRequest())
+            } catch (e: Exception) {
+                Log.w(AUTH_TAG, "Failed to clear credential state: ${e.message}")
             } finally {
+                Firebase.auth.signOut()
                 onSignOutComplete()
             }
         }
