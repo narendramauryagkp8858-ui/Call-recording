@@ -95,16 +95,32 @@ class RecordingManager(private val context: Context) {
         return runCatching {
             when (settings.audioFormat) {
                 AudioFormatOption.WAV -> {
-                    val wav = WavAudioRecorder(
-                        outputFile = outputFile,
-                        sampleRateHz = currentSampleRate,
-                        audioSource = androidSource,
-                        onAmplitude = { amp ->
-                            _session.value = _session.value.copy(amplitude = amp)
+                    val sources = listOf(
+                        androidSource,
+                        MediaRecorder.AudioSource.MIC,
+                        MediaRecorder.AudioSource.VOICE_RECOGNITION
+                    ).distinct()
+                    var startedWav: WavAudioRecorder? = null
+                    var lastErr: Throwable? = null
+                    for (src in sources) {
+                        val wav = WavAudioRecorder(
+                            outputFile = outputFile,
+                            sampleRateHz = currentSampleRate,
+                            audioSource = src,
+                            onAmplitude = { amp ->
+                                _session.value = _session.value.copy(amplitude = amp)
+                            }
+                        )
+                        try {
+                            wav.start(scope)
+                            startedWav = wav
+                            break
+                        } catch (t: Throwable) {
+                            lastErr = t
+                            wav.releaseImmediate()
                         }
-                    )
-                    wav.start(scope)
-                    wavRecorder = wav
+                    }
+                    wavRecorder = startedWav ?: throw (lastErr ?: IllegalStateException("WAV AudioRecord failed"))
                 }
                 AudioFormatOption.M4A, AudioFormatOption.AAC -> {
                     startMediaRecorderWithFallback(
@@ -261,7 +277,11 @@ class RecordingManager(private val context: Context) {
         bitRateBps: Int,
         primarySource: Int
     ) {
-        val candidateSources = listOf(primarySource, MediaRecorder.AudioSource.MIC).distinct()
+        val candidateSources = listOf(
+            primarySource,
+            MediaRecorder.AudioSource.MIC,
+            MediaRecorder.AudioSource.VOICE_RECOGNITION
+        ).distinct()
         var lastError: Throwable? = null
 
         for (source in candidateSources) {

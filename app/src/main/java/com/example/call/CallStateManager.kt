@@ -44,6 +44,7 @@ class CallStateManager(
     val monitorStatus: StateFlow<CallMonitorStatus> = _monitorStatus.asStateFlow()
 
     private var lastTelephonyState: Int = TelephonyManager.CALL_STATE_IDLE
+    private var offhookTriggeredForCurrentCall: Boolean = false
     private var pendingOutgoingNumber: String = ""
     private var lastRingingNumber: String = ""
     private var registeredCallback: Any? = null
@@ -138,6 +139,7 @@ class CallStateManager(
                     lastRingingNumber = cleanedNumber
                 }
                 pendingOutgoingNumber = ""
+                offhookTriggeredForCurrentCall = false
                 scope.launch {
                     settingsDataStore.setPendingCallInfo(CallDirection.INCOMING, lastRingingNumber)
                 }
@@ -150,10 +152,17 @@ class CallStateManager(
             }
 
             TelephonyManager.CALL_STATE_OFFHOOK -> {
-                if (lastTelephonyState == TelephonyManager.CALL_STATE_OFFHOOK) {
+                // On Android 9+, PHONE_STATE_CHANGED often fires twice (first with null number, then with number).
+                // Allow a second pass if we haven't triggered recording yet and a number just arrived.
+                if (offhookTriggeredForCurrentCall) {
                     return
                 }
-                val wasRinging = lastTelephonyState == TelephonyManager.CALL_STATE_RINGING
+                if (lastTelephonyState == TelephonyManager.CALL_STATE_OFFHOOK && cleanedNumber.isEmpty()) {
+                    return
+                }
+
+                val wasRinging = lastTelephonyState == TelephonyManager.CALL_STATE_RINGING ||
+                    lastRingingNumber.isNotEmpty()
                 val direction = if (wasRinging) CallDirection.INCOMING else CallDirection.OUTGOING
 
                 scope.launch {
@@ -177,7 +186,9 @@ class CallStateManager(
                         statusDetail = "Call active (${effectiveDirection.label})"
                     )
 
-                    if (repository.shouldRecordCall(effectiveDirection, resolvedNumber, settings)) {
+                    val shouldRecord = repository.shouldRecordCall(effectiveDirection, resolvedNumber, settings)
+                    if (shouldRecord) {
+                        offhookTriggeredForCurrentCall = true
                         val contactName = repository.resolveContactName(resolvedNumber)
                         RecordingService.startAutoCallRecording(
                             context = context,
@@ -187,16 +198,22 @@ class CallStateManager(
                         )
                     } else if (settings.autoRecordEnabled) {
                         _monitorStatus.value = _monitorStatus.value.copy(
-                            statusDetail = "Call skipped by contact/direction rule"
+                            statusDetail = if (resolvedNumber.isEmpty() && settings.filterMode != com.example.data.AutoRecordFilterMode.ALL_CALLS) {
+                                "Waiting for caller ID or Call Log permission for contact filter"
+                            } else {
+                                "Call skipped by contact/direction rule"
+                            }
                         )
                     }
                 }
             }
 
             TelephonyManager.CALL_STATE_IDLE -> {
-                if (lastTelephonyState != TelephonyManager.CALL_STATE_IDLE) {
+                RecordingService.dismissBackgroundPromptNotification(context)
+                if (lastTelephonyState != TelephonyManager.CALL_STATE_IDLE || offhookTriggeredForCurrentCall) {
                     RecordingService.stopIfAutoCallActive(context)
                 }
+                offhookTriggeredForCurrentCall = false
                 lastRingingNumber = ""
                 pendingOutgoingNumber = ""
                 scope.launch {

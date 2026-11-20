@@ -339,9 +339,10 @@ class RecordingService : Service() {
             try {
                 ContextCompat.startForegroundService(context, intent)
             } catch (e: Exception) {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
-                    e is ForegroundServiceStartNotAllowedException
-                ) {
+                val isBgRestricted = (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+                    e is ForegroundServiceStartNotAllowedException) ||
+                    e is SecurityException
+                if (isBgRestricted) {
                     postBackgroundRestrictedNotification(context, direction, phoneNumber, contactName)
                 } else {
                     _lastServiceError.value = e.localizedMessage
@@ -378,6 +379,13 @@ class RecordingService : Service() {
             }
         }
 
+        fun dismissBackgroundPromptNotification(context: Context) {
+            runCatching {
+                val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                nm.cancel(NOTIF_ID_BG_PROMPT)
+            }
+        }
+
         fun postMonitorReadyNotification(context: Context) {
             ensureNotificationChannels(context)
             if (!canPostNotifications(context)) return
@@ -407,35 +415,35 @@ class RecordingService : Service() {
             ensureNotificationChannels(context)
             if (!canPostNotifications(context)) return
 
-            val startIntent = Intent(context, RecordingService::class.java).apply {
+            // Launch MainActivity via PendingIntent.getActivity so Android 14/15 grants
+            // while-in-use microphone eligibility before starting RecordingService.
+            val activityIntent = Intent(context, MainActivity::class.java).apply {
                 action = ACTION_START_AUTO_CALL
                 putExtra(EXTRA_DIRECTION, direction.name)
                 putExtra(EXTRA_PHONE_NUMBER, phoneNumber)
                 putExtra(EXTRA_CONTACT_NAME, contactName)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
             }
-            val pendingStart = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                PendingIntent.getForegroundService(
-                    context,
-                    105,
-                    startIntent,
-                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-                )
-            } else {
-                PendingIntent.getService(
-                    context,
-                    105,
-                    startIntent,
-                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-                )
-            }
+            val pendingActivity = PendingIntent.getActivity(
+                context,
+                105,
+                activityIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
 
+            val caller = contactName.ifBlank { phoneNumber.ifBlank { "${direction.label} Call" } }
             val notif = NotificationCompat.Builder(context, CHANNEL_MONITOR)
                 .setSmallIcon(android.R.drawable.ic_btn_speak_now)
                 .setContentTitle(context.getString(R.string.notif_bg_restricted_title))
-                .setContentText(context.getString(R.string.notif_bg_restricted_body))
+                .setContentText("Active call ($caller). Tap to open & record mic audio (turn Speaker ON for other side).")
+                .setStyle(
+                    NotificationCompat.BigTextStyle().bigText(
+                        "Android blocks silent background recording during Google Phone calls. Tap here to start microphone capture for $caller (enable Speakerphone to capture the caller's voice)."
+                    )
+                )
                 .setPriority(NotificationCompat.PRIORITY_HIGH)
                 .setAutoCancel(true)
-                .setContentIntent(pendingStart)
+                .setContentIntent(pendingActivity)
                 .build()
 
             val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager

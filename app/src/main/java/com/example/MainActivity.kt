@@ -1,6 +1,7 @@
 package com.example
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
@@ -57,6 +58,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import com.example.data.CallDirection
 import com.example.data.ContactRuleType
 import com.example.data.RecordingEntity
 import com.example.service.RecordingService
@@ -93,6 +95,7 @@ class MainActivity : FragmentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         RecordingService.ensureNotificationChannels(this)
+        handleStartFromNotificationIntent(intent)
 
         setContent {
             val viewModel: RecordingViewModel = viewModel()
@@ -131,6 +134,30 @@ class MainActivity : FragmentActivity() {
                     )
                 }
             }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleStartFromNotificationIntent(intent)
+    }
+
+    private fun handleStartFromNotificationIntent(intent: Intent?) {
+        if (intent?.action == RecordingService.ACTION_START_AUTO_CALL) {
+            val dirName = intent.getStringExtra(RecordingService.EXTRA_DIRECTION)
+                ?: CallDirection.INCOMING.name
+            val direction = runCatching { CallDirection.valueOf(dirName) }
+                .getOrDefault(CallDirection.INCOMING)
+            val number = intent.getStringExtra(RecordingService.EXTRA_PHONE_NUMBER).orEmpty()
+            val contactName = intent.getStringExtra(RecordingService.EXTRA_CONTACT_NAME).orEmpty()
+            intent.action = null
+            RecordingService.startAutoCallRecording(
+                context = this,
+                direction = direction,
+                phoneNumber = number,
+                contactName = contactName
+            )
         }
     }
 
