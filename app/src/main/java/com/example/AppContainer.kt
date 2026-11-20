@@ -8,6 +8,8 @@ import com.example.data.AppDatabase
 import com.example.data.BackupManager
 import com.example.data.RecordingRepository
 import com.example.data.SettingsDataStore
+import com.example.telecom.CallLogRepository
+import com.example.telecom.ContactsRepository
 
 class AppContainer private constructor(context: Context) {
     private val appContext = context.applicationContext
@@ -21,6 +23,8 @@ class AppContainer private constructor(context: Context) {
             contactRuleDao = database.contactRuleDao()
         )
     }
+    val callLogRepository: CallLogRepository by lazy { CallLogRepository(appContext) }
+    val contactsRepository: ContactsRepository by lazy { ContactsRepository(appContext) }
     val recordingManager: RecordingManager by lazy { RecordingManager(appContext) }
     val audioPlayerManager: AudioPlayerManager by lazy { AudioPlayerManager() }
     val backupManager: BackupManager by lazy { BackupManager(appContext, repository) }

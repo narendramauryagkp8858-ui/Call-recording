@@ -186,6 +186,13 @@ class CallStateManager(
                         statusDetail = "Call active (${effectiveDirection.label})"
                     )
 
+                    val handledByInCallService = com.example.telecom.DialerInCallService.instance != null ||
+                        com.example.telecom.DeviceCompatHelper.isDefaultDialer(context)
+                    if (handledByInCallService) {
+                        offhookTriggeredForCurrentCall = true
+                        return@launch
+                    }
+
                     val shouldRecord = repository.shouldRecordCall(effectiveDirection, resolvedNumber, settings)
                     if (shouldRecord) {
                         offhookTriggeredForCurrentCall = true

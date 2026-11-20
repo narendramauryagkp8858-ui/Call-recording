@@ -23,6 +23,11 @@ import com.example.data.ContactRuleType
 import com.example.data.RecordingEntity
 import com.example.data.SortOption
 import com.example.service.RecordingService
+import com.example.telecom.CallLogEntryType
+import com.example.telecom.CallLogItem
+import com.example.telecom.CarrierSettingsManager
+import com.example.telecom.DeviceContact
+import com.example.telecom.ForwardCondition
 import java.io.File
 import java.util.Calendar
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -49,6 +54,8 @@ class RecordingViewModel(application: Application) : AndroidViewModel(applicatio
 
     private val container = AppContainer.get(application)
     private val repository = container.repository
+    private val callLogRepository = container.callLogRepository
+    private val contactsRepository = container.contactsRepository
     private val settingsStore = container.settingsDataStore
     private val recordingManager = container.recordingManager
     private val playerManager = container.audioPlayerManager
@@ -68,6 +75,67 @@ class RecordingViewModel(application: Application) : AndroidViewModel(applicatio
     val playbackState: StateFlow<PlaybackState> = playerManager.state
     val callMonitorStatus: StateFlow<CallMonitorStatus> = callStateManager.monitorStatus
 
+    // Dialer State
+    private val _dialNumber = MutableStateFlow("")
+    val dialNumber: StateFlow<String> = _dialNumber.asStateFlow()
+
+    // Call History State
+    private val _allCallLogs = MutableStateFlow<List<CallLogItem>>(emptyList())
+    private val _callLogFilter = MutableStateFlow<CallLogEntryType?>(null)
+    val callLogFilter: StateFlow<CallLogEntryType?> = _callLogFilter.asStateFlow()
+    private val _callLogSearch = MutableStateFlow("")
+    val callLogSearch: StateFlow<String> = _callLogSearch.asStateFlow()
+
+    val filteredCallLogs: StateFlow<List<CallLogItem>> = combine(
+        _allCallLogs,
+        _callLogFilter,
+        _callLogSearch
+    ) { logs, filter, query ->
+        val trimmed = query.trim().lowercase()
+        logs.filter { item ->
+            val matchType = filter == null || item.type == filter
+            val matchQuery = trimmed.isEmpty() ||
+                item.cachedName.lowercase().contains(trimmed) ||
+                item.number.lowercase().contains(trimmed)
+            matchType && matchQuery
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    // Contacts State
+    private val _allContacts = MutableStateFlow<List<DeviceContact>>(emptyList())
+    private val _contactSearch = MutableStateFlow("")
+    val contactSearch: StateFlow<String> = _contactSearch.asStateFlow()
+
+    val filteredContacts: StateFlow<List<DeviceContact>> = combine(
+        _allContacts,
+        _contactSearch
+    ) { list, query ->
+        val trimmed = query.trim().lowercase()
+        if (trimmed.isEmpty()) {
+            list
+        } else {
+            list.filter {
+                it.name.lowercase().contains(trimmed) || it.number.lowercase().contains(trimmed)
+            }
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val dialSuggestedContacts: StateFlow<List<DeviceContact>> = combine(
+        _allContacts,
+        _dialNumber
+    ) { list, query ->
+        val digits = query.filter { it.isDigit() }
+        if (digits.isEmpty()) {
+            emptyList()
+        } else {
+            list.filter { contact ->
+                val cDigits = contact.number.filter { it.isDigit() }
+                cDigits.contains(digits) || matchesT9(contact.name, digits)
+            }.take(6)
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    // Recordings Filter/Sort State
     private val _searchQuery = MutableStateFlow("")
     val searchQuery: StateFlow<String> = _searchQuery.asStateFlow()
 
@@ -85,6 +153,9 @@ class RecordingViewModel(application: Application) : AndroidViewModel(applicatio
 
     private val _uiMessage = MutableStateFlow<String?>(null)
     val uiMessage: StateFlow<String?> = _uiMessage.asStateFlow()
+
+    private val _carrierStatusMessage = MutableStateFlow<String?>(null)
+    val carrierStatusMessage: StateFlow<String?> = _carrierStatusMessage.asStateFlow()
 
     private val _isBackupBusy = MutableStateFlow(false)
     val isBackupBusy: StateFlow<Boolean> = _isBackupBusy.asStateFlow()
@@ -148,6 +219,8 @@ class RecordingViewModel(application: Application) : AndroidViewModel(applicatio
             }
         }
 
+        refreshDeviceData()
+
         viewModelScope.launch {
             RecordingService.lastServiceError.collect { err ->
                 if (!err.isNullOrBlank()) {
@@ -158,14 +231,170 @@ class RecordingViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
-    fun refreshCompatibility() {
+    fun refreshCompatibilityAndData() {
         val status = RecordingManager.detectCompatibility(getApplication())
         _compatibility.value = status
         if (status.hasPhoneStatePermission && settings.value.autoRecordEnabled) {
             callStateManager.registerTelephonyObserver()
         }
+        refreshDeviceData()
     }
 
+    fun refreshDeviceData() {
+        viewModelScope.launch {
+            _allCallLogs.value = callLogRepository.loadRecentCallLogs()
+            _allContacts.value = contactsRepository.loadContacts()
+        }
+    }
+
+    // Dialer Actions
+    fun appendDialDigit(digit: String) {
+        if (_dialNumber.value.length < 32) {
+            _dialNumber.value += digit
+        }
+    }
+
+    fun replaceLastZeroWithPlus() {
+        val current = _dialNumber.value
+        if (current.endsWith("0")) {
+            _dialNumber.value = current.dropLast(1) + "+"
+        } else if (current.isEmpty()) {
+            _dialNumber.value = "+"
+        }
+    }
+
+    fun backspaceDial() {
+        if (_dialNumber.value.isNotEmpty()) {
+            _dialNumber.value = _dialNumber.value.dropLast(1)
+        }
+    }
+
+    fun clearDial() {
+        _dialNumber.value = ""
+    }
+
+    fun setDialNumber(number: String) {
+        _dialNumber.value = number.filter { it.isDigit() || it in setOf('+', '*', '#', '-', ' ', '(', ')') }
+    }
+
+    fun placeCall(number: String = _dialNumber.value) {
+        val target = number.trim()
+        if (target.isEmpty()) {
+            // Redial last dialed / recent number if dialpad is empty
+            val lastOutgoing = _allCallLogs.value.firstOrNull { it.number.isNotBlank() }?.number
+            if (!lastOutgoing.isNullOrBlank()) {
+                _dialNumber.value = lastOutgoing
+                return
+            }
+            _uiMessage.value = "Enter a phone number to call."
+            return
+        }
+        val result = CarrierSettingsManager.placeRealCallOrDial(getApplication(), target)
+        result.onSuccess { msg ->
+            _uiMessage.value = msg
+        }.onFailure { err ->
+            _uiMessage.value = err.localizedMessage ?: "Unable to place call."
+        }
+    }
+
+    // Call History Actions
+    fun setCallLogFilter(type: CallLogEntryType?) {
+        _callLogFilter.value = type
+    }
+
+    fun setCallLogSearch(query: String) {
+        _callLogSearch.value = query
+    }
+
+    fun deleteCallLogEntry(id: Long) {
+        viewModelScope.launch {
+            val ok = callLogRepository.deleteCallLogEntry(id)
+            if (ok) {
+                refreshDeviceData()
+                _uiMessage.value = "Call log entry deleted"
+            } else {
+                _uiMessage.value = "Call log permission required to delete entries"
+            }
+        }
+    }
+
+    fun clearAllCallLogs() {
+        viewModelScope.launch {
+            val ok = callLogRepository.clearAllCallLogs()
+            if (ok) {
+                refreshDeviceData()
+                _uiMessage.value = "Call history cleared"
+            } else {
+                _uiMessage.value = "Call log permission required to clear history"
+            }
+        }
+    }
+
+    // Contacts Actions
+    fun setContactSearch(query: String) {
+        _contactSearch.value = query
+    }
+
+    // Carrier Call Forwarding & Call Waiting (Real GSM MMI / USSD)
+    fun setCallWaiting(enable: Boolean) {
+        val code = if (enable) {
+            CarrierSettingsManager.MMI_CALL_WAITING_ENABLE
+        } else {
+            CarrierSettingsManager.MMI_CALL_WAITING_DISABLE
+        }
+        _carrierStatusMessage.value = "Sending $code to carrier..."
+        CarrierSettingsManager.executeMmiOrUssd(getApplication(), code) { response ->
+            _carrierStatusMessage.value = response
+        }
+    }
+
+    fun checkCallWaitingStatus() {
+        _carrierStatusMessage.value = "Querying Call Waiting (*#43#)..."
+        CarrierSettingsManager.executeMmiOrUssd(
+            getApplication(),
+            CarrierSettingsManager.MMI_CALL_WAITING_STATUS
+        ) { response ->
+            _carrierStatusMessage.value = response
+        }
+    }
+
+    fun activateCallForwarding(condition: ForwardCondition, forwardToNumber: String) {
+        if (!forwardToNumber.any { it.isDigit() }) {
+            _uiMessage.value = "Enter a destination phone number for forwarding."
+            return
+        }
+        val code = CarrierSettingsManager.buildForwardActivateCode(condition, forwardToNumber)
+        _carrierStatusMessage.value = "Activating ${condition.label} ($code)..."
+        CarrierSettingsManager.executeMmiOrUssd(getApplication(), code) { response ->
+            _carrierStatusMessage.value = response
+        }
+    }
+
+    fun deactivateCallForwarding(condition: ForwardCondition) {
+        _carrierStatusMessage.value = "Deactivating ${condition.label} (${condition.deactivateCode})..."
+        CarrierSettingsManager.executeMmiOrUssd(getApplication(), condition.deactivateCode) { response ->
+            _carrierStatusMessage.value = response
+        }
+    }
+
+    fun checkCallForwardingStatus(condition: ForwardCondition) {
+        _carrierStatusMessage.value = "Checking ${condition.label} (${condition.statusCode})..."
+        CarrierSettingsManager.executeMmiOrUssd(getApplication(), condition.statusCode) { response ->
+            _carrierStatusMessage.value = response
+        }
+    }
+
+    fun cancelAllCallForwarding() {
+        _carrierStatusMessage.value = "Canceling all call forwarding (##002#)..."
+        CarrierSettingsManager.executeMmiOrUssd(
+            getApplication(),
+            CarrierSettingsManager.MMI_CANCEL_ALL_FORWARDING
+        ) { response ->
+            _carrierStatusMessage.value = response
+        }
+    }
+
+    // Recordings Filter/Sort & Actions
     fun updateSearchQuery(query: String) {
         _searchQuery.value = query
     }
@@ -206,10 +435,6 @@ class RecordingViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun seekPlayback(positionMs: Long) {
         playerManager.seekTo(positionMs)
-    }
-
-    fun stopPlayback() {
-        playerManager.stop()
     }
 
     fun renameRecording(id: Long, newTitle: String) {
@@ -391,6 +616,18 @@ class RecordingViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
+    fun resetAllAppData() {
+        viewModelScope.launch {
+            playerManager.stop()
+            repository.deleteAllRecordings()
+            repository.getAllRulesOnce().forEach { repository.deleteContactRule(it.id) }
+            settingsStore.setAutoRecordEnabled(false)
+            settingsStore.setPinLock(false)
+            settingsStore.setBiometricLockEnabled(false)
+            _uiMessage.value = "All local recordings, rules, and lock data cleared"
+        }
+    }
+
     fun consumeMessage() {
         _uiMessage.value = null
         playerManager.clearError()
@@ -399,5 +636,24 @@ class RecordingViewModel(application: Application) : AndroidViewModel(applicatio
     override fun onCleared() {
         super.onCleared()
         playerManager.stop()
+    }
+
+    companion object {
+        private fun matchesT9(name: String, digits: String): Boolean {
+            val t9 = name.lowercase().map { ch ->
+                when (ch) {
+                    in 'a'..'c' -> '2'
+                    in 'd'..'f' -> '3'
+                    in 'g'..'i' -> '4'
+                    in 'j'..'l' -> '5'
+                    in 'm'..'o' -> '6'
+                    in 'p'..'s' -> '7'
+                    in 't'..'v' -> '8'
+                    in 'w'..'z' -> '9'
+                    else -> ch
+                }
+            }.joinToString("")
+            return t9.contains(digits)
+        }
     }
 }

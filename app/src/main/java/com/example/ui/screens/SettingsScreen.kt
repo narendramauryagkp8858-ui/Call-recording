@@ -20,6 +20,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Backup
+import androidx.compose.material.icons.filled.BatteryChargingFull
+import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.DeleteForever
 import androidx.compose.material.icons.filled.DeleteOutline
@@ -27,8 +29,12 @@ import androidx.compose.material.icons.filled.Fingerprint
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.PhoneAndroid
+import androidx.compose.material.icons.filled.PhoneForwarded
+import androidx.compose.material.icons.filled.RestartAlt
 import androidx.compose.material.icons.filled.Restore
 import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.SettingsApplications
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -58,15 +64,27 @@ import com.example.data.CompatibilityStatus
 import com.example.data.ContactRuleEntity
 import com.example.data.ContactRuleType
 import com.example.ui.components.formatFileSize
+import com.example.ui.theme.CyanGlow
+import com.example.ui.theme.VerifiedEmerald
+import com.example.ui.theme.WarningAmber
 
 @Composable
 fun SettingsScreen(
     settings: AppSettings,
     contactRules: List<ContactRuleEntity>,
     compatibility: CompatibilityStatus,
+    carrierStatusMessage: String?,
     storageUsedBytes: Long,
     isBackupBusy: Boolean,
     isBiometricHardwareAvailable: Boolean,
+    onRequestDefaultDialer: () -> Unit,
+    onOpenBatteryOptimization: () -> Unit,
+    onOpenOemAutoStart: () -> Unit,
+    onOpenSystemCallSettings: () -> Unit,
+    onCallWaitingChange: (Boolean) -> Unit,
+    onCheckCallWaitingStatus: () -> Unit,
+    onOpenCallForwardingDialog: () -> Unit,
+    onCancelAllCallForwarding: () -> Unit,
     onToggleAutoRecord: (Boolean) -> Unit,
     onToggleAutoIncoming: (Boolean) -> Unit,
     onToggleAutoOutgoing: (Boolean) -> Unit,
@@ -87,6 +105,7 @@ fun SettingsScreen(
     onRequestExportBackup: () -> Unit,
     onRequestRestoreBackup: () -> Unit,
     onRequestDeleteAll: () -> Unit,
+    onRequestResetAppData: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Box(
@@ -100,11 +119,241 @@ fun SettingsScreen(
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
+            // 1. Default Phone App & OPPO / Vivo / Xiaomi Compatibility
+            item {
+                SettingsSectionCard(title = "Phone Dialer & Device Compatibility") {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Default Phone App", style = MaterialTheme.typography.titleMedium)
+                            Text(
+                                text = if (compatibility.isDefaultDialer) {
+                                    "Active · Using Narendra Phone In-Call Dialer"
+                                } else {
+                                    "Not default · Set as default for instant pickup call recording"
+                                },
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = if (compatibility.isDefaultDialer) VerifiedEmerald else WarningAmber
+                            )
+                        }
+                        if (!compatibility.isDefaultDialer) {
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Button(
+                                onClick = onRequestDefaultDialer,
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier.testTag("settings_set_default_dialer_button")
+                            ) {
+                                Text("Set Default")
+                            }
+                        }
+                    }
+
+                    HorizontalDivider(
+                        modifier = Modifier.padding(vertical = 8.dp),
+                        color = MaterialTheme.colorScheme.outlineVariant
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Background Battery Saver", style = MaterialTheme.typography.titleMedium)
+                            Text(
+                                text = if (compatibility.isBatteryOptimizationIgnored) {
+                                    "Unrestricted · Safe for background calls on ${compatibility.manufacturer}"
+                                } else {
+                                    "Optimized · Disable battery limits for OPPO/Vivo/Xiaomi/MIUI"
+                                },
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = if (compatibility.isBatteryOptimizationIgnored) VerifiedEmerald else WarningAmber
+                            )
+                        }
+                        if (!compatibility.isBatteryOptimizationIgnored) {
+                            Spacer(modifier = Modifier.width(8.dp))
+                            OutlinedButton(
+                                onClick = onOpenBatteryOptimization,
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier.testTag("settings_battery_opt_button")
+                            ) {
+                                Icon(Icons.Default.BatteryChargingFull, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Allow")
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = onOpenOemAutoStart,
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("settings_oem_autostart_button")
+                        ) {
+                            Icon(Icons.Default.SettingsApplications, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("OEM Auto-Start")
+                        }
+                        OutlinedButton(
+                            onClick = onShowCompatibilityDialog,
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("settings_compatibility_button")
+                        ) {
+                            Icon(Icons.Default.PhoneAndroid, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Compatibility")
+                        }
+                    }
+                }
+            }
+
+            // 2. Carrier Call Settings: Call Waiting & Call Forwarding
+            item {
+                SettingsSectionCard(title = "Carrier Call Settings (Forwarding & Waiting)") {
+                    Text(
+                        text = "Call Waiting (GSM MMI / USSD)",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Text(
+                        text = "Receive alerts when a second call arrives during an active call.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Button(
+                            onClick = { onCallWaitingChange(true) },
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("call_waiting_enable_button")
+                        ) {
+                            Text("Enable (*43#)")
+                        }
+                        OutlinedButton(
+                            onClick = { onCallWaitingChange(false) },
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("call_waiting_disable_button")
+                        ) {
+                            Text("Disable (#43#)")
+                        }
+                        OutlinedButton(
+                            onClick = onCheckCallWaitingStatus,
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.testTag("call_waiting_status_button")
+                        ) {
+                            Text("Status")
+                        }
+                    }
+
+                    HorizontalDivider(
+                        modifier = Modifier.padding(vertical = 10.dp),
+                        color = MaterialTheme.colorScheme.outlineVariant
+                    )
+
+                    Text(
+                        text = "Call Forwarding",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Text(
+                        text = "Forward incoming calls Always (*21*), When Busy (*67*), Unanswered (*61*), or Unreachable (*62*).",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Button(
+                            onClick = onOpenCallForwardingDialog,
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("open_call_forwarding_button")
+                        ) {
+                            Icon(Icons.Default.PhoneForwarded, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Configure Forwarding")
+                        }
+                        OutlinedButton(
+                            onClick = onCancelAllCallForwarding,
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.testTag("cancel_all_forwarding_button")
+                        ) {
+                            Text("Cancel All")
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    OutlinedButton(
+                        onClick = onOpenSystemCallSettings,
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("open_system_call_settings_button")
+                    ) {
+                        Icon(Icons.Default.Tune, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Open System SIM & Network Call Settings")
+                    }
+
+                    if (!carrierStatusMessage.isNullOrBlank()) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                            border = BorderStroke(1.dp, CyanGlow.copy(alpha = 0.45f)),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Call,
+                                    contentDescription = null,
+                                    tint = CyanGlow,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Text(
+                                    text = carrierStatusMessage,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = CyanGlow
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 3. Automatic Call Recording
             item {
                 SettingsSectionCard(title = "Automatic Call Recording") {
                     SettingsSwitchRow(
                         title = "Enable Automatic Recording",
-                        subtitle = "Monitor phone state for incoming and outgoing calls",
+                        subtitle = "Auto-record when incoming or outgoing calls connect",
                         checked = settings.autoRecordEnabled,
                         onCheckedChange = onToggleAutoRecord,
                         testTag = "settings_auto_record_switch"
@@ -112,7 +361,7 @@ fun SettingsScreen(
                     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                     SettingsSwitchRow(
                         title = "Record Incoming Calls",
-                        subtitle = "Automatically capture when incoming calls connect",
+                        subtitle = "Automatically capture when incoming calls are answered",
                         checked = settings.autoRecordIncoming,
                         enabled = settings.autoRecordEnabled,
                         onCheckedChange = onToggleAutoIncoming
@@ -120,7 +369,7 @@ fun SettingsScreen(
                     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                     SettingsSwitchRow(
                         title = "Record Outgoing Calls",
-                        subtitle = "Automatically capture when outgoing calls start",
+                        subtitle = "Automatically capture when outgoing calls connect",
                         checked = settings.autoRecordOutgoing,
                         enabled = settings.autoRecordEnabled,
                         onCheckedChange = onToggleAutoOutgoing
@@ -225,6 +474,7 @@ fun SettingsScreen(
                 }
             }
 
+            // 4. Audio Format & Quality
             item {
                 SettingsSectionCard(title = "Audio Format & Quality") {
                     Text(
@@ -299,7 +549,7 @@ fun SettingsScreen(
                         subtitle = if (compatibility.hasPrivilegedCaptureAudioOutput) {
                             "Device permits CAPTURE_AUDIO_OUTPUT for two-way line"
                         } else {
-                            "Unavailable on standard Android without CAPTURE_AUDIO_OUTPUT; falls back cleanly to Microphone"
+                            "Standard Android restricts VOICE_CALL; falls back cleanly to Microphone (use Speaker toggle on Call Screen for caller audio)"
                         },
                         checked = settings.preferTwoWayAttempt,
                         onCheckedChange = onTogglePreferTwoWay
@@ -307,6 +557,7 @@ fun SettingsScreen(
                 }
             }
 
+            // 5. Privacy Lock & Appearance
             item {
                 SettingsSectionCard(title = "Privacy Lock & Appearance") {
                     SettingsSwitchRow(
@@ -320,7 +571,7 @@ fun SettingsScreen(
                     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                     SettingsSwitchRow(
                         title = "PIN Lock (4-Digit)",
-                        subtitle = "Require PIN when opening Narendra Call Recorder",
+                        subtitle = "Require PIN when opening Narendra Phone",
                         icon = Icons.Default.Lock,
                         checked = settings.pinLockEnabled,
                         onCheckedChange = onTogglePinLock,
@@ -351,6 +602,7 @@ fun SettingsScreen(
                 }
             }
 
+            // 6. Notifications
             item {
                 SettingsSectionCard(title = "Notifications") {
                     SettingsSwitchRow(
@@ -371,8 +623,9 @@ fun SettingsScreen(
                 }
             }
 
+            // 7. Storage, Backup & Reset
             item {
-                SettingsSectionCard(title = "Storage, Backup & Compatibility") {
+                SettingsSectionCard(title = "Storage, Backup & Reset") {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -393,7 +646,7 @@ fun SettingsScreen(
                                 tint = MaterialTheme.colorScheme.error
                             )
                             Spacer(modifier = Modifier.width(4.dp))
-                            Text("Clear All", color = MaterialTheme.colorScheme.error)
+                            Text("Clear Audio", color = MaterialTheme.colorScheme.error)
                         }
                     }
 
@@ -454,16 +707,6 @@ fun SettingsScreen(
                         horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
                         OutlinedButton(
-                            onClick = onShowCompatibilityDialog,
-                            shape = RoundedCornerShape(14.dp),
-                            colors = ButtonDefaults.outlinedButtonColors(),
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Icon(Icons.Default.PhoneAndroid, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("Compatibility")
-                        }
-                        OutlinedButton(
                             onClick = onShowConsentDialog,
                             shape = RoundedCornerShape(14.dp),
                             modifier = Modifier.weight(1f)
@@ -471,6 +714,20 @@ fun SettingsScreen(
                             Icon(Icons.Default.Security, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(6.dp))
                             Text("Consent Info")
+                        }
+                        OutlinedButton(
+                            onClick = onRequestResetAppData,
+                            shape = RoundedCornerShape(14.dp),
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                contentColor = MaterialTheme.colorScheme.error
+                            ),
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("reset_app_data_button")
+                        ) {
+                            Icon(Icons.Default.RestartAlt, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Reset Data")
                         }
                     }
                 }
@@ -488,11 +745,11 @@ fun SettingsScreen(
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         Text(
-                            text = "Narendra Call Recorder · v1.0",
+                            text = "Narendra Phone · v2.0",
                             style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
                         )
                         Text(
-                            text = "Developed by Narendra · Android ${compatibility.androidVersionName} (API ${compatibility.apiLevel})",
+                            text = "Developed by Narendra · ${compatibility.manufacturer} · Android ${compatibility.androidVersionName} (API ${compatibility.apiLevel})",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )

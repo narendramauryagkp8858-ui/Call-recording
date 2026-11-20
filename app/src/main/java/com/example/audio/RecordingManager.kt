@@ -399,6 +399,15 @@ class RecordingManager(private val context: Context) {
         fun detectCompatibility(context: Context): CompatibilityStatus {
             val apiLevel = Build.VERSION.SDK_INT
             val versionName = Build.VERSION.RELEASE ?: "Unknown"
+            val manufacturer = (Build.MANUFACTURER ?: "Android").replaceFirstChar { it.uppercase() }
+
+            val isDefaultDialer = com.example.telecom.DeviceCompatHelper.isDefaultDialer(context)
+            val isBatteryIgnored = com.example.telecom.DeviceCompatHelper.isBatteryOptimizationIgnored(context)
+
+            val hasCallPhone = ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.CALL_PHONE
+            ) == PackageManager.PERMISSION_GRANTED
 
             val hasRecordAudio = ContextCompat.checkSelfPermission(
                 context,
@@ -413,6 +422,11 @@ class RecordingManager(private val context: Context) {
             val hasCallLog = ContextCompat.checkSelfPermission(
                 context,
                 Manifest.permission.READ_CALL_LOG
+            ) == PackageManager.PERMISSION_GRANTED
+
+            val hasWriteCallLog = ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.WRITE_CALL_LOG
             ) == PackageManager.PERMISSION_GRANTED
 
             val hasContacts = ContextCompat.checkSelfPermission(
@@ -438,33 +452,47 @@ class RecordingManager(private val context: Context) {
 
             val title = when {
                 isTwoWay -> "Two-Way System Capture Permitted"
-                apiLevel >= Build.VERSION_CODES.Q -> "Microphone Mode Only (Android 10+ Restriction)"
-                else -> "Standard Microphone Mode (Legacy Android)"
+                isDefaultDialer -> "Default Dialer Active · Mic Call Recording"
+                apiLevel >= Build.VERSION_CODES.Q -> "Set Default Phone App for In-Call Recording"
+                else -> "Standard Microphone Mode"
             }
 
             val summary = when {
                 isTwoWay ->
                     "System-level CAPTURE_AUDIO_OUTPUT permission is present. VOICE_CALL audio source is supported."
-                apiLevel >= Build.VERSION_CODES.Q ->
-                    "Android $versionName (API $apiLevel) blocks third-party apps from capturing the remote cellular downlink without privileged OEM permissions. This app honestly records your microphone (and speakerphone audio when audible) and never fakes two-way capture."
+                isDefaultDialer ->
+                    "Narendra Phone is your active Default Dialer on $manufacturer (Android $versionName). Calls route through the built-in In-Call screen with Auto & Manual mic recording. Note: Android 10+ still blocks direct remote cellular line capture for third-party apps; use Speakerphone for both voices."
                 else ->
-                    "Android $versionName (API $apiLevel) lacks CAPTURE_AUDIO_OUTPUT permission on this device. Recording uses the standard microphone path; remote voice requires speakerphone."
+                    "Set Narendra Phone as your Default Phone App to handle incoming/outgoing calls with the built-in In-Call Dialer and Auto/Manual recording on call pickup."
             }
 
-            val bgNote = if (apiLevel >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                "Android 14+ restricts starting microphone foreground services directly from background broadcasts. Keep the app open or tap the call notification prompt if auto-start is blocked by the OS."
-            } else if (apiLevel >= Build.VERSION_CODES.Q) {
-                "Android 10+ enforces strict background microphone access rules. Auto-recording displays a persistent foreground notification when active."
-            } else {
-                "Background call monitoring operates via standard telephony state broadcasts."
+            val bgNote = when {
+                manufacturer.equals("Xiaomi", ignoreCase = true) ||
+                    manufacturer.equals("Redmi", ignoreCase = true) ||
+                    manufacturer.equals("Poco", ignoreCase = true) ->
+                    "Xiaomi/MIUI/HyperOS aggressively kills background apps. Enable Auto-Start and set Battery Saver to No Restrictions in Settings."
+                manufacturer.equals("Oppo", ignoreCase = true) ||
+                    manufacturer.equals("Realme", ignoreCase = true) ||
+                    manufacturer.equals("Oneplus", ignoreCase = true) ->
+                    "OPPO/Realme ColorOS restricts background launch. Enable Allow Auto-Launch and Background Activity in Settings."
+                manufacturer.equals("Vivo", ignoreCase = true) ||
+                    manufacturer.equals("Iqoo", ignoreCase = true) ->
+                    "Vivo FuntouchOS/OriginOS requires High Background Power Consumption / Auto-Start enabled for reliable call screen & recording."
+                else ->
+                    "Setting Narendra Phone as Default Dialer + disabling battery optimization ensures reliable incoming call UI and recording."
             }
 
             return CompatibilityStatus(
                 androidVersionName = versionName,
                 apiLevel = apiLevel,
+                manufacturer = manufacturer,
+                isDefaultDialer = isDefaultDialer,
+                isBatteryOptimizationIgnored = isBatteryIgnored,
+                hasCallPhonePermission = hasCallPhone,
                 hasRecordAudioPermission = hasRecordAudio,
                 hasPhoneStatePermission = hasPhoneState,
                 hasCallLogPermission = hasCallLog,
+                hasWriteCallLogPermission = hasWriteCallLog,
                 hasContactsPermission = hasContacts,
                 hasNotificationPermission = hasNotification,
                 hasPrivilegedCaptureAudioOutput = hasCaptureAudioOutput,

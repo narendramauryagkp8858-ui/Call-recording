@@ -15,6 +15,8 @@ import com.example.data.ContactRuleType
 import com.example.data.RecordingEntity
 import com.example.data.RecordingRepository
 import com.example.data.SettingsDataStore
+import com.example.telecom.CarrierSettingsManager
+import com.example.telecom.ForwardCondition
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -73,6 +75,32 @@ class RecordingLogicTest {
         assertFalse(compat.hasPrivilegedCaptureAudioOutput)
         assertFalse(compat.isTwoWaySupported)
         assertEquals(AudioSourceMode.VOICE_COMMUNICATION, compat.recommendedAudioSource)
+    }
+
+    @Test
+    fun `carrier settings builds valid GSM call forwarding and waiting MMI codes`() {
+        assertEquals(
+            "*21*+919876543210#",
+            CarrierSettingsManager.buildForwardActivateCode(ForwardCondition.ALWAYS, "+91 98765-43210")
+        )
+        assertEquals(
+            "*67*9876543210#",
+            CarrierSettingsManager.buildForwardActivateCode(ForwardCondition.WHEN_BUSY, "9876543210")
+        )
+        assertEquals(
+            "*61*9876543210#",
+            CarrierSettingsManager.buildForwardActivateCode(ForwardCondition.WHEN_UNANSWERED, "9876543210")
+        )
+        assertEquals(
+            "*62*9876543210#",
+            CarrierSettingsManager.buildForwardActivateCode(ForwardCondition.WHEN_UNREACHABLE, "9876543210")
+        )
+        assertEquals("##21#", ForwardCondition.ALWAYS.deactivateCode)
+        assertEquals("*#21#", ForwardCondition.ALWAYS.statusCode)
+        assertEquals("*43#", CarrierSettingsManager.MMI_CALL_WAITING_ENABLE)
+        assertEquals("#43#", CarrierSettingsManager.MMI_CALL_WAITING_DISABLE)
+        assertEquals("*#43#", CarrierSettingsManager.MMI_CALL_WAITING_STATUS)
+        assertEquals("##002#", CarrierSettingsManager.MMI_CANCEL_ALL_FORWARDING)
     }
 
     @Test

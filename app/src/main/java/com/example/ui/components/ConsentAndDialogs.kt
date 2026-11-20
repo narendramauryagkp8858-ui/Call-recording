@@ -1,28 +1,38 @@
 package com.example.ui.components
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Contacts
+import androidx.compose.material.icons.filled.DeleteForever
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.PhoneForwarded
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -40,6 +50,8 @@ import androidx.compose.ui.unit.dp
 import com.example.R
 import com.example.data.CompatibilityStatus
 import com.example.data.ContactRuleType
+import com.example.telecom.ForwardCondition
+import com.example.ui.theme.CyanGlow
 import com.example.ui.theme.VerifiedEmerald
 import com.example.ui.theme.WarningAmber
 
@@ -96,13 +108,24 @@ fun ConsentDialog(
 fun CompatibilityDetailsDialog(
     status: CompatibilityStatus,
     onRequestPermissions: () -> Unit,
+    onRequestDefaultDialer: () -> Unit,
+    onOpenAutoStart: () -> Unit,
     onDismiss: () -> Unit
 ) {
+    val missingCorePermissions = !status.hasRecordAudioPermission ||
+        !status.hasPhoneStatePermission ||
+        !status.hasCallPhonePermission ||
+        !status.hasCallLogPermission
+
     AlertDialog(
         onDismissRequest = onDismiss,
         icon = {
             Icon(
-                imageVector = if (status.isTwoWaySupported) Icons.Default.CheckCircle else Icons.Default.WarningAmber,
+                imageVector = if (status.isTwoWaySupported || status.isDefaultDialer) {
+                    Icons.Default.CheckCircle
+                } else {
+                    Icons.Default.WarningAmber
+                },
                 contentDescription = null,
                 tint = if (status.isTwoWaySupported) VerifiedEmerald else WarningAmber
             )
@@ -116,8 +139,13 @@ fun CompatibilityDetailsDialog(
         text = {
             Column(
                 modifier = Modifier.verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
+                Text(
+                    text = "${status.manufacturer} · Android ${status.androidVersionName} (API ${status.apiLevel})",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = CyanGlow
+                )
                 Text(
                     text = status.compatibilityTitle,
                     style = MaterialTheme.typography.titleMedium,
@@ -128,7 +156,7 @@ fun CompatibilityDetailsDialog(
                     style = MaterialTheme.typography.bodyMedium
                 )
                 Text(
-                    text = "Background Behavior (Android ${status.androidVersionName} / API ${status.apiLevel})",
+                    text = "OEM & Background Behavior",
                     style = MaterialTheme.typography.labelLarge,
                     color = MaterialTheme.colorScheme.primary
                 )
@@ -139,16 +167,42 @@ fun CompatibilityDetailsDialog(
                 )
 
                 Spacer(modifier = Modifier.height(4.dp))
+                PermissionStatusRow("Default Phone App (ROLE_DIALER)", status.isDefaultDialer)
+                PermissionStatusRow("Battery Unrestricted", status.isBatteryOptimizationIgnored)
                 PermissionStatusRow("Microphone (RECORD_AUDIO)", status.hasRecordAudioPermission)
+                PermissionStatusRow("Place Calls (CALL_PHONE)", status.hasCallPhonePermission)
                 PermissionStatusRow("Phone State (READ_PHONE_STATE)", status.hasPhoneStatePermission)
-                PermissionStatusRow("Caller Number (READ_CALL_LOG)", status.hasCallLogPermission)
+                PermissionStatusRow("Call History Read (READ_CALL_LOG)", status.hasCallLogPermission)
+                PermissionStatusRow("Call History Manage (WRITE_CALL_LOG)", status.hasWriteCallLogPermission)
                 PermissionStatusRow("Contacts Lookup (READ_CONTACTS)", status.hasContactsPermission)
                 PermissionStatusRow("Notifications (POST_NOTIFICATIONS)", status.hasNotificationPermission)
                 PermissionStatusRow("System Two-Way (CAPTURE_AUDIO_OUTPUT)", status.hasPrivilegedCaptureAudioOutput)
+
+                if (!status.isDefaultDialer) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    OutlinedButton(
+                        onClick = {
+                            onDismiss()
+                            onRequestDefaultDialer()
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Set Narendra Phone as Default Dialer")
+                    }
+                }
+                OutlinedButton(
+                    onClick = {
+                        onDismiss()
+                        onOpenAutoStart()
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Open OPPO / Vivo / Xiaomi Auto-Start")
+                }
             }
         },
         confirmButton = {
-            if (!status.hasRecordAudioPermission || !status.hasPhoneStatePermission) {
+            if (missingCorePermissions) {
                 Button(onClick = {
                     onDismiss()
                     onRequestPermissions()
@@ -182,11 +236,131 @@ private fun PermissionStatusRow(label: String, granted: Boolean) {
             modifier = Modifier.weight(1f)
         )
         Text(
-            text = if (granted) "Granted" else "Missing",
+            text = if (granted) "Ready" else "Missing",
             style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold),
             color = if (granted) VerifiedEmerald else WarningAmber
         )
     }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun CallForwardingDialog(
+    carrierStatusMessage: String?,
+    onActivate: (ForwardCondition, String) -> Unit,
+    onDeactivate: (ForwardCondition) -> Unit,
+    onCheckStatus: (ForwardCondition) -> Unit,
+    onCancelAll: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    var selectedCondition by remember { mutableStateOf(ForwardCondition.ALWAYS) }
+    var forwardNumber by remember { mutableStateOf("") }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = {
+            Icon(
+                imageVector = Icons.Default.PhoneForwarded,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary
+            )
+        },
+        title = { Text("Call Forwarding (Carrier MMI)") },
+        text = {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text(
+                    text = "Select a forwarding condition and enter the target phone number. Commands are executed via GSM MMI/USSD codes directly with your carrier.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    ForwardCondition.entries.forEach { cond ->
+                        FilterChip(
+                            selected = selectedCondition == cond,
+                            onClick = { selectedCondition = cond },
+                            label = { Text(cond.label) }
+                        )
+                    }
+                }
+
+                OutlinedTextField(
+                    value = forwardNumber,
+                    onValueChange = { input ->
+                        forwardNumber = input.filter { it.isDigit() || it in setOf('+', ' ', '-') }
+                    },
+                    label = { Text("Forward To Number") },
+                    placeholder = { Text("+919876543210") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
+                    singleLine = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("call_forward_number_input")
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = { onCheckStatus(selectedCondition) },
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("Check (${selectedCondition.statusCode})")
+                    }
+                    OutlinedButton(
+                        onClick = { onDeactivate(selectedCondition) },
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("Turn Off")
+                    }
+                }
+
+                OutlinedButton(
+                    onClick = onCancelAll,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Cancel All Forwarding (##002#)")
+                }
+
+                if (!carrierStatusMessage.isNullOrBlank()) {
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = carrierStatusMessage,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = CyanGlow,
+                            modifier = Modifier.padding(10.dp)
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onActivate(selectedCondition, forwardNumber) },
+                enabled = forwardNumber.any { it.isDigit() },
+                modifier = Modifier.testTag("call_forward_activate_button")
+            ) {
+                Text("Activate")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Close")
+            }
+        }
+    )
 }
 
 @Composable
@@ -232,11 +406,19 @@ fun RenameRecordingDialog(
 fun DeleteConfirmDialog(
     title: String,
     message: String,
+    confirmLabel: String = "Delete",
     onConfirm: () -> Unit,
     onDismiss: () -> Unit
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
+        icon = {
+            Icon(
+                imageVector = Icons.Default.DeleteForever,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.error
+            )
+        },
         title = { Text(title) },
         text = { Text(message, style = MaterialTheme.typography.bodyMedium) },
         confirmButton = {
@@ -247,7 +429,7 @@ fun DeleteConfirmDialog(
                 ),
                 modifier = Modifier.testTag("delete_confirm_button")
             ) {
-                Text("Delete")
+                Text(confirmLabel)
             }
         },
         dismissButton = {
@@ -288,8 +470,8 @@ fun AddContactRuleDialog(
                     },
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Icon(Icons.Default.Contacts, contentDescription = null)
-                    Spacer(modifier = Modifier.padding(horizontal = 4.dp))
+                    Icon(Icons.Default.Contacts, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
                     Text("Pick from Phone Contacts")
                 }
 
@@ -398,7 +580,7 @@ fun BackupConsentDialog(
                 text = if (isExport) {
                     "You are about to export your call recordings and metadata into a local ZIP file at a location you choose. No data is uploaded automatically to any server."
                 } else {
-                    "Select a previously exported Narendra Call Recorder ZIP backup to restore audio files and metadata onto this device."
+                    "Select a previously exported Narendra Phone ZIP backup to restore audio files and metadata onto this device."
                 },
                 style = MaterialTheme.typography.bodyMedium
             )

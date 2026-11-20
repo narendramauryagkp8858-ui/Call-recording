@@ -22,6 +22,6 @@ dependencyResolutionManagement {
   }
 }
 
-rootProject.name = "Narendra Call Recorder"
+rootProject.name = "Narendra Phone"
 
 include(":app")
