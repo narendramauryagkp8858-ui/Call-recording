@@ -203,6 +203,7 @@ fun AuthScreen(
                             },
                             onAuthCancelled = {
                                 isLoading = false
+                                errorMessage = "Sign-in was cancelled. Make sure a Google account is added on your phone and tap Sign in with Google again."
                             }
                         )
                     },
