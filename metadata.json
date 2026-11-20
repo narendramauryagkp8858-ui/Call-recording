@@ -1,6 +1,6 @@
 {
-  "name": "Narendra Phone",
-  "description": "Complete native Android Phone Dialer with real InCallService, Call History, Contacts, Auto/Manual Call Recording, Call Forwarding & Call Waiting settings, and OPPO/Vivo/Xiaomi compatibility.",
+  "name": "Narendra Billing",
+  "description": "GST Billing & Inventory app by Narendra with multi-shop profiles, Stamp/Mohar & Signature upload, GST Calculator, Khareed/Bikri rates, Bluetooth ESC/POS thermal printing, and WhatsApp PDF invoice sharing.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

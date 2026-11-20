@@ -1,0 +1,125 @@
+{
+  "entities": {
+    "ShopProfile": {
+      "title": "ShopProfile",
+      "description": "Merchant shop profile with GSTIN, invoice counter, stamp (Mohar), and signature.",
+      "type": "object",
+      "properties": {
+        "shopName": { "type": "string", "description": "Business or shop display name" },
+        "gstin": { "type": "string", "description": "15-digit GSTIN or blank for unregistered" },
+        "phone": { "type": "string", "description": "Shop contact phone number" },
+        "address": { "type": "string", "description": "Full shop address" },
+        "stateName": { "type": "string", "description": "Registered Indian state name" },
+        "invoicePrefix": { "type": "string", "description": "Prefix for generated invoice numbers" },
+        "nextInvoiceNumber": { "type": "integer", "description": "Next sequential invoice number" },
+        "termsAndConditions": { "type": "string", "description": "Invoice footer terms" },
+        "stampBase64": { "type": "string", "description": "Compressed PNG Base64 of shop Mohar/stamp" },
+        "signatureBase64": { "type": "string", "description": "Compressed PNG Base64 of shop signature" },
+        "defaultActive": { "type": "boolean", "description": "Whether this shop is active by default" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp on creation" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp on update" }
+      },
+      "required": [
+        "shopName", "gstin", "phone", "address", "stateName", "invoicePrefix",
+        "nextInvoiceNumber", "termsAndConditions", "stampBase64", "signatureBase64",
+        "defaultActive", "createdAt", "updatedAt"
+      ]
+    },
+    "ProductItem": {
+      "title": "ProductItem",
+      "description": "Inventory item storing private Khareed (purchase) rate and customer-facing Bikri (selling) rate.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "Product or service name" },
+        "hsnCode": { "type": "string", "description": "HSN or SAC tax code" },
+        "unit": { "type": "string", "description": "Billing unit such as PCS, KG, BOX" },
+        "purchaseRate": { "type": "number", "description": "Private Khareed rate (never printed on customer bill)" },
+        "sellingRate": { "type": "number", "description": "Bikri rate printed on GST invoices" },
+        "gstRate": { "type": "number", "description": "GST tax percentage slab" },
+        "taxInclusive": { "type": "boolean", "description": "Whether sellingRate already includes GST" },
+        "stockQty": { "type": "number", "description": "Available quantity in stock" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp on creation" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp on update" }
+      },
+      "required": [
+        "name", "hsnCode", "unit", "purchaseRate", "sellingRate",
+        "gstRate", "taxInclusive", "stockQty", "createdAt", "updatedAt"
+      ]
+    },
+    "Customer": {
+      "title": "Customer",
+      "description": "Customer directory record with name, address, mobile number, and optional GSTIN.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "Customer full name" },
+        "phone": { "type": "string", "description": "Customer mobile number" },
+        "address": { "type": "string", "description": "Customer billing address" },
+        "gstin": { "type": "string", "description": "Optional customer GSTIN" },
+        "stateName": { "type": "string", "description": "Customer state name" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp on creation" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp on update" }
+      },
+      "required": ["name", "phone", "address", "gstin", "stateName", "createdAt", "updatedAt"]
+    },
+    "Invoice": {
+      "title": "Invoice",
+      "description": "Generated GST Tax Invoice storing selling-rate line items, tax split, and stamp/signature flags.",
+      "type": "object",
+      "properties": {
+        "invoiceNumber": { "type": "string", "description": "Formatted invoice number" },
+        "shopId": { "type": "string", "description": "Owning shop document ID" },
+        "shopName": { "type": "string", "description": "Snapshot of shop name" },
+        "shopGstin": { "type": "string", "description": "Snapshot of shop GSTIN" },
+        "shopPhone": { "type": "string", "description": "Snapshot of shop phone" },
+        "shopAddress": { "type": "string", "description": "Snapshot of shop address" },
+        "customerId": { "type": "string", "description": "Optional customer document ID" },
+        "customerName": { "type": "string", "description": "Customer name on bill" },
+        "customerPhone": { "type": "string", "description": "Customer mobile number on bill" },
+        "customerAddress": { "type": "string", "description": "Customer address on bill" },
+        "customerGstin": { "type": "string", "description": "Customer GSTIN on bill" },
+        "interState": { "type": "boolean", "description": "True for IGST, false for CGST+SGST" },
+        "includeStamp": { "type": "boolean", "description": "Include shop Mohar/stamp on PDF" },
+        "includeSignature": { "type": "boolean", "description": "Include shop signature on PDF" },
+        "items": { "type": "array", "description": "Bounded list (1..50) of selling-rate line items" },
+        "subtotalTaxable": { "type": "number", "description": "Taxable value before GST" },
+        "cgstAmount": { "type": "number", "description": "Total CGST amount" },
+        "sgstAmount": { "type": "number", "description": "Total SGST amount" },
+        "igstAmount": { "type": "number", "description": "Total IGST amount" },
+        "totalGstAmount": { "type": "number", "description": "Total GST tax amount" },
+        "grandTotal": { "type": "number", "description": "Final payable amount" },
+        "estimatedProfit": { "type": "number", "description": "Private shopkeeper profit estimate" },
+        "paymentMode": { "type": "string", "enum": ["CASH", "UPI", "CARD", "CREDIT"] },
+        "notes": { "type": "string", "description": "Optional invoice note" },
+        "issuedAtMillis": { "type": "integer", "description": "Client display issue time in epoch millis" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp on creation" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp on update" }
+      },
+      "required": [
+        "invoiceNumber", "shopId", "shopName", "shopGstin", "shopPhone", "shopAddress",
+        "customerId", "customerName", "customerPhone", "customerAddress", "customerGstin",
+        "interState", "includeStamp", "includeSignature", "items",
+        "subtotalTaxable", "cgstAmount", "sgstAmount", "igstAmount", "totalGstAmount",
+        "grandTotal", "estimatedProfit", "paymentMode", "notes", "issuedAtMillis",
+        "createdAt", "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}/shops/{shopId}": {
+      "schema": { "$ref": "#/entities/ShopProfile" },
+      "description": "Shops owned by the authenticated user."
+    },
+    "/users/{userId}/products/{productId}": {
+      "schema": { "$ref": "#/entities/ProductItem" },
+      "description": "Inventory items with Khareed and Bikri rates owned by the user."
+    },
+    "/users/{userId}/customers/{customerId}": {
+      "schema": { "$ref": "#/entities/Customer" },
+      "description": "Customer directory owned by the user."
+    },
+    "/users/{userId}/invoices/{invoiceId}": {
+      "schema": { "$ref": "#/entities/Invoice" },
+      "description": "Generated GST invoices owned by the user."
+    }
+  }
+}

@@ -1,45 +1,15 @@
 <resources>
-    <string name="app_name">Narendra Phone</string>
-    <string name="app_tagline">Dialer · Call Recorder · Call Settings</string>
-    <string name="developer_credit">Developed by Narendra</string>
-
-    <!-- Navigation -->
-    <string name="nav_dialer">Dialer</string>
-    <string name="nav_history">Recents</string>
-    <string name="nav_contacts">Contacts</string>
-    <string name="nav_recordings">Recordings</string>
-    <string name="nav_settings">Settings</string>
-
-    <!-- Recording Status & Controls -->
-    <string name="status_idle">Standby</string>
-    <string name="status_recording">Recording Live</string>
-    <string name="status_paused">Paused</string>
-    <string name="status_monitoring">Call Monitor Active</string>
-    <string name="action_start_recording">Start Recording</string>
-    <string name="action_pause">Pause</string>
-    <string name="action_resume">Resume</string>
-    <string name="action_stop">Stop &amp; Save</string>
-
-    <!-- Notifications -->
-    <string name="notif_channel_incoming_call_name">Incoming Calls</string>
-    <string name="notif_channel_incoming_call_desc">Full-screen ringtone alerts for incoming calls</string>
-    <string name="notif_channel_ongoing_call_name">Active Calls</string>
-    <string name="notif_channel_ongoing_call_desc">Controls and elapsed time during an active phone call</string>
-    <string name="notif_channel_recording_name">Active Recording</string>
-    <string name="notif_channel_recording_desc">Shows live status and controls while recording audio</string>
-    <string name="notif_channel_monitor_name">Call Monitor &amp; Alerts</string>
-    <string name="notif_channel_monitor_desc">Shows auto-recording standby status and Android restriction alerts</string>
-    <string name="notif_recording_title">Recording in Progress</string>
-    <string name="notif_recording_paused">Recording Paused</string>
-    <string name="notif_saved_title">Recording Saved</string>
-    <string name="notif_bg_restricted_title">Tap to Start Call Recording</string>
-    <string name="notif_bg_restricted_body">Android blocks silent background mic start when another dialer is active. Tap here to start recording.</string>
-
-    <!-- Consent & Compatibility -->
-    <string name="consent_title">Phone Dialer &amp; Call Recording Notice</string>
-    <string name="consent_body">1. Default Phone App &amp; Recording: Setting Narendra Phone as your Default Phone App routes incoming and outgoing calls through its real In-Call Dialer so Auto &amp; Manual recording can start directly when a call is picked up.\n\n2. Two-Way Audio Reality: On Android 10–15+, standard apps do not receive privileged CAPTURE_AUDIO_OUTPUT permission unless granted by the OEM/system. When restricted, this app records via your microphone and provides a 1-tap Speakerphone toggle on the call screen so the caller can also be heard.\n\n3. Legal Consent &amp; Privacy: Always comply with local recording consent laws. Recordings and call logs stay strictly on your device.</string>
-    <string name="consent_accept">I Understand &amp; Continue</string>
-
-    <!-- Share / FileProvider -->
-    <string name="share_recording_title">Share Recording</string>
+    <string name="app_name">Narendra Billing</string>
+    <string name="app_tagline">GST Billing, Shop Mohar &amp; Thermal Print</string>
+    <string name="sign_in_google">Sign in with Google</string>
+    <string name="sign_out">Sign Out</string>
+    <string name="nav_bill">New Bill</string>
+    <string name="nav_history">Bills</string>
+    <string name="nav_catalog">Items</string>
+    <string name="nav_calc">GST Calc</string>
+    <string name="nav_shop">Shops</string>
+    <string name="share_whatsapp">Share PDF on WhatsApp</string>
+    <string name="print_thermal">Thermal Print</string>
+    <string name="preview_pdf">Preview GST Bill</string>
+    <string name="generate_bill">Save &amp; Generate Bill</string>
 </resources>

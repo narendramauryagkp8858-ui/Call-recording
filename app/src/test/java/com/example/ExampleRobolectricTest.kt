@@ -13,9 +13,9 @@ import org.robolectric.annotation.Config
 class ExampleRobolectricTest {
 
     @Test
-    fun `app name matches Narendra Phone`() {
+    fun `app name matches Narendra Billing`() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val appName = context.getString(R.string.app_name)
-        assertEquals("Narendra Phone", appName)
+        assertEquals("Narendra Billing", appName)
     }
 }

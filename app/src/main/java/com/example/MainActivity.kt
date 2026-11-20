@@ -1,34 +1,22 @@
 package com.example
 
-import android.Manifest
-import android.content.Intent
-import android.content.pm.PackageManager
-import android.net.Uri
-import android.os.Build
 import android.os.Bundle
-import android.provider.ContactsContract
-import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.biometric.BiometricManager
-import androidx.biometric.BiometricPrompt
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Contacts
-import androidx.compose.material.icons.filled.Dialpad
-import androidx.compose.material.icons.filled.History
-import androidx.compose.material.icons.filled.LibraryMusic
-import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.outlined.Contacts
-import androidx.compose.material.icons.outlined.Dialpad
-import androidx.compose.material.icons.outlined.History
-import androidx.compose.material.icons.outlined.LibraryMusic
-import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.filled.Calculate
+import androidx.compose.material.icons.filled.Inventory2
+import androidx.compose.material.icons.filled.Receipt
+import androidx.compose.material.icons.filled.ReceiptLong
+import androidx.compose.material.icons.filled.Storefront
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -43,485 +31,229 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.core.content.ContextCompat
-import androidx.fragment.app.FragmentActivity
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
-import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.ViewModelProvider.AndroidViewModelFactory.Companion.APPLICATION_KEY
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import androidx.navigation.NavDestination.Companion.hasRoute
-import androidx.navigation.compose.NavHost
-import androidx.navigation.compose.composable
-import androidx.navigation.compose.currentBackStackEntryAsState
-import androidx.navigation.compose.rememberNavController
-import com.example.data.CallDirection
-import com.example.data.ContactRuleType
-import com.example.data.RecordingEntity
-import com.example.service.RecordingService
-import com.example.telecom.DeviceCompatHelper
-import com.example.ui.RecordingViewModel
-import com.example.ui.components.AddContactRuleDialog
-import com.example.ui.components.AppLockScreen
-import com.example.ui.components.BackupConsentDialog
-import com.example.ui.components.CallForwardingDialog
-import com.example.ui.components.CompatibilityDetailsDialog
-import com.example.ui.components.ConsentDialog
-import com.example.ui.components.DeleteConfirmDialog
-import com.example.ui.components.RenameRecordingDialog
-import com.example.ui.components.SetPinDialog
-import com.example.ui.screens.CallHistoryScreen
-import com.example.ui.screens.ContactsScreen
-import com.example.ui.screens.DialerScreen
-import com.example.ui.screens.RecordingsScreen
-import com.example.ui.screens.SettingsScreen
-import com.example.ui.theme.NarendraCallRecorderTheme
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.serialization.Serializable
+import androidx.lifecycle.viewmodel.initializer
+import androidx.lifecycle.viewmodel.viewModelFactory
+import com.example.billing.InvoicePdfGenerator
+import com.example.billing.ThermalPrinterManager
+import com.example.data.BillingRepository
+import com.example.data.Invoice
+import com.example.data.PrinterConfig
+import com.example.data.PrinterPreferences
+import com.example.data.ShopProfile
+import com.example.data.authStateFlow
+import com.example.ui.BillingViewModel
+import com.example.ui.UiState
+import com.example.ui.components.PdfPreviewDialog
+import com.example.ui.screens.AuthScreen
+import com.example.ui.screens.CatalogScreen
+import com.example.ui.screens.CreateBillScreen
+import com.example.ui.screens.GstCalculatorScreen
+import com.example.ui.screens.InvoicesScreen
+import com.example.ui.screens.ShopsAndPrinterScreen
+import com.example.ui.theme.NarendraBillingTheme
+import com.google.firebase.Firebase
+import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.auth.auth
+import com.google.firebase.firestore.FirebaseFirestore
+import kotlinx.coroutines.launch
+import java.io.File
 
-@Serializable
-data object DialerRoute
+enum class BillingTab(val label: String, val icon: ImageVector, val testTag: String) {
+    NEW_BILL("New Bill", Icons.Default.Receipt, "tab_new_bill"),
+    BILLS("Bills", Icons.Default.ReceiptLong, "tab_bills"),
+    CATALOG("Items", Icons.Default.Inventory2, "tab_catalog"),
+    GST_CALC("GST Calc", Icons.Default.Calculate, "tab_gst_calc"),
+    SHOPS("Shops", Icons.Default.Storefront, "tab_shops")
+}
 
-@Serializable
-data object HistoryRoute
-
-@Serializable
-data object ContactsRoute
-
-@Serializable
-data object RecordingsRoute
-
-@Serializable
-data object SettingsRoute
-
-class MainActivity : FragmentActivity() {
-
-    private val pendingDialUriNumber = MutableStateFlow<String?>(null)
-
+class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        RecordingService.ensureNotificationChannels(this)
-        handleIncomingIntent(intent)
-
         setContent {
-            val viewModel: RecordingViewModel = viewModel()
-            val settings by viewModel.settings.collectAsStateWithLifecycle()
-            val isAppLocked by viewModel.isAppLocked.collectAsStateWithLifecycle()
-            val pendingDial by pendingDialUriNumber.collectAsStateWithLifecycle()
-
-            NarendraCallRecorderTheme(darkTheme = settings.darkModeEnabled) {
-                val biometricAvailable = remember { checkBiometricHardwareAvailable() }
-
-                val triggerBiometric: () -> Unit = remember(viewModel) {
-                    {
-                        showBiometricPrompt(
-                            onSuccess = { viewModel.unlockWithBiometrics() },
-                            onError = { /* User can fall back to PIN or retry */ }
-                        )
-                    }
-                }
-
-                LaunchedEffect(isAppLocked, settings.biometricLockEnabled) {
-                    if (isAppLocked && settings.biometricLockEnabled) {
-                        triggerBiometric()
-                    }
-                }
-
-                if (isAppLocked) {
-                    AppLockScreen(
-                        pinEnabled = settings.pinLockEnabled,
-                        biometricEnabled = settings.biometricLockEnabled && biometricAvailable,
-                        onVerifyPin = viewModel::verifyPin,
-                        onTriggerBiometric = triggerBiometric
-                    )
-                } else {
-                    MainAppShell(
-                        viewModel = viewModel,
-                        isBiometricAvailable = biometricAvailable,
-                        pendingDialNumber = pendingDial,
-                        onConsumePendingDial = { pendingDialUriNumber.value = null }
-                    )
-                }
+            NarendraBillingTheme {
+                AppNavigation()
             }
         }
     }
+}
 
-    override fun onNewIntent(intent: Intent) {
-        super.onNewIntent(intent)
-        setIntent(intent)
-        handleIncomingIntent(intent)
-    }
-
-    private fun handleIncomingIntent(intent: Intent?) {
-        if (intent == null) return
-        if (intent.action == RecordingService.ACTION_START_AUTO_CALL) {
-            val dirName = intent.getStringExtra(RecordingService.EXTRA_DIRECTION)
-                ?: CallDirection.INCOMING.name
-            val direction = runCatching { CallDirection.valueOf(dirName) }
-                .getOrDefault(CallDirection.INCOMING)
-            val number = intent.getStringExtra(RecordingService.EXTRA_PHONE_NUMBER).orEmpty()
-            val contactName = intent.getStringExtra(RecordingService.EXTRA_CONTACT_NAME).orEmpty()
-            intent.action = null
-            RecordingService.startAutoCallRecording(
-                context = this,
-                direction = direction,
-                phoneNumber = number,
-                contactName = contactName
-            )
-            return
+@Composable
+fun AppNavigation(auth: FirebaseAuth = Firebase.auth) {
+    val currentUser by auth.authStateFlow().collectAsStateWithLifecycle(initialValue = auth.currentUser)
+    val user = currentUser
+    if (user == null) {
+        AuthScreen(onAuthSuccess = {})
+    } else {
+        key(user.uid) {
+            BillingAppShell(currentUserId = user.uid)
         }
-
-        val action = intent.action
-        if (action == Intent.ACTION_DIAL || action == Intent.ACTION_VIEW) {
-            val uri = intent.data
-            if (uri != null && uri.scheme == "tel") {
-                val ssp = uri.schemeSpecificPart.orEmpty()
-                if (ssp.isNotBlank()) {
-                    pendingDialUriNumber.value = Uri.decode(ssp)
-                }
-            }
-        }
-    }
-
-    private fun checkBiometricHardwareAvailable(): Boolean {
-        val bm = BiometricManager.from(this)
-        val result = bm.canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_WEAK)
-        return result == BiometricManager.BIOMETRIC_SUCCESS
-    }
-
-    private fun showBiometricPrompt(
-        onSuccess: () -> Unit,
-        onError: (String) -> Unit
-    ) {
-        val executor = ContextCompat.getMainExecutor(this)
-        val prompt = BiometricPrompt(
-            this,
-            executor,
-            object : BiometricPrompt.AuthenticationCallback() {
-                override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
-                    onSuccess()
-                }
-
-                override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
-                    onError(errString.toString())
-                }
-            }
-        )
-        val info = BiometricPrompt.PromptInfo.Builder()
-            .setTitle(getString(R.string.app_name))
-            .setSubtitle("Authenticate to access Narendra Phone")
-            .setNegativeButtonText("Use PIN / Cancel")
-            .build()
-        prompt.authenticate(info)
     }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun MainAppShell(
-    viewModel: RecordingViewModel,
-    isBiometricAvailable: Boolean,
-    pendingDialNumber: String?,
-    onConsumePendingDial: () -> Unit
-) {
+fun BillingAppShell(currentUserId: String) {
     val context = LocalContext.current
-    val lifecycleOwner = LocalLifecycleOwner.current
-    val navController = rememberNavController()
-    val backStackEntry by navController.currentBackStackEntryAsState()
+    val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
 
-    val settings by viewModel.settings.collectAsStateWithLifecycle()
-    val stats by viewModel.dashboardStats.collectAsStateWithLifecycle()
-    val dialNumber by viewModel.dialNumber.collectAsStateWithLifecycle()
-    val dialSuggestedContacts by viewModel.dialSuggestedContacts.collectAsStateWithLifecycle()
-    val filteredCallLogs by viewModel.filteredCallLogs.collectAsStateWithLifecycle()
-    val callLogFilter by viewModel.callLogFilter.collectAsStateWithLifecycle()
-    val callLogSearch by viewModel.callLogSearch.collectAsStateWithLifecycle()
-    val filteredContacts by viewModel.filteredContacts.collectAsStateWithLifecycle()
-    val contactSearch by viewModel.contactSearch.collectAsStateWithLifecycle()
-    val allRecordings by viewModel.allRecordings.collectAsStateWithLifecycle()
-    val filteredRecordings by viewModel.filteredRecordings.collectAsStateWithLifecycle()
-    val contactRules by viewModel.contactRules.collectAsStateWithLifecycle()
-    val activeSession by viewModel.activeSession.collectAsStateWithLifecycle()
-    val playbackState by viewModel.playbackState.collectAsStateWithLifecycle()
-    val compatibility by viewModel.compatibility.collectAsStateWithLifecycle()
-    val searchQuery by viewModel.searchQuery.collectAsStateWithLifecycle()
-    val sortOption by viewModel.sortOption.collectAsStateWithLifecycle()
-    val directionFilter by viewModel.directionFilter.collectAsStateWithLifecycle()
-    val uiMessage by viewModel.uiMessage.collectAsStateWithLifecycle()
-    val carrierStatusMessage by viewModel.carrierStatusMessage.collectAsStateWithLifecycle()
-    val isBackupBusy by viewModel.isBackupBusy.collectAsStateWithLifecycle()
-
-    var showCompatibilityDialog by remember { mutableStateOf(false) }
-    var showConsentDialogManual by remember { mutableStateOf(false) }
-    var showCallForwardingDialog by remember { mutableStateOf(false) }
-    var recordingToRename by remember { mutableStateOf<RecordingEntity?>(null) }
-    var recordingToDelete by remember { mutableStateOf<RecordingEntity?>(null) }
-    var showDeleteAllConfirm by remember { mutableStateOf(false) }
-    var showClearLogsConfirm by remember { mutableStateOf(false) }
-    var showResetAppDataConfirm by remember { mutableStateOf(false) }
-    var addRuleDialogType by remember { mutableStateOf<ContactRuleType?>(null) }
-    var pendingPickRuleType by remember { mutableStateOf<ContactRuleType?>(null) }
-    var showSetPinDialog by remember { mutableStateOf(false) }
-    var backupConsentExport by remember { mutableStateOf<Boolean?>(null) }
-
-    val runtimePermissions = remember {
-        buildList {
-            add(Manifest.permission.CALL_PHONE)
-            add(Manifest.permission.RECORD_AUDIO)
-            add(Manifest.permission.READ_PHONE_STATE)
-            add(Manifest.permission.READ_CALL_LOG)
-            add(Manifest.permission.WRITE_CALL_LOG)
-            add(Manifest.permission.READ_CONTACTS)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                add(Manifest.permission.POST_NOTIFICATIONS)
-            }
-        }.toTypedArray()
-    }
-
-    val permissionLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestMultiplePermissions()
-    ) {
-        viewModel.refreshCompatibilityAndData()
-    }
-
-    val defaultDialerLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.StartActivityForResult()
-    ) {
-        viewModel.refreshCompatibilityAndData()
-    }
-
-    val requestDefaultDialer: () -> Unit = {
-        val intent = DeviceCompatHelper.createDefaultDialerIntent(context)
-        if (intent != null) {
-            defaultDialerLauncher.launch(intent)
-        } else {
-            DeviceCompatHelper.openOemAutoStartSettings(context)
-        }
-    }
-
-    val exportBackupLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.CreateDocument("application/zip")
-    ) { uri: Uri? ->
-        if (uri != null) {
-            viewModel.exportBackup(uri)
-        }
-    }
-
-    val restoreBackupLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenDocument()
-    ) { uri: Uri? ->
-        if (uri != null) {
-            viewModel.restoreBackup(uri)
-        }
-    }
-
-    val contactPickerLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.PickContact()
-    ) { contactUri: Uri? ->
-        val ruleType = pendingPickRuleType ?: ContactRuleType.INCLUDE
-        pendingPickRuleType = null
-        if (contactUri != null) {
-            val hasContacts = ContextCompat.checkSelfPermission(
-                context,
-                Manifest.permission.READ_CONTACTS
-            ) == PackageManager.PERMISSION_GRANTED
-            if (hasContacts) {
-                extractContactPhoneAndName(context, contactUri)?.let { (number, name) ->
-                    viewModel.addContactRule(number, name, ruleType)
-                }
-            } else {
-                permissionLauncher.launch(arrayOf(Manifest.permission.READ_CONTACTS))
+    val viewModel: BillingViewModel = viewModel(
+        key = currentUserId,
+        factory = viewModelFactory {
+            initializer {
+                val app = checkNotNull(this[APPLICATION_KEY])
+                val databaseId = app.getString(R.string.firestore_database_id)
+                val db = FirebaseFirestore.getInstance(databaseId)
+                BillingViewModel(BillingRepository(db), currentUserId)
             }
         }
+    )
+
+    val printerPrefs = remember(context) { PrinterPreferences(context.applicationContext) }
+    val printerConfig by printerPrefs.configFlow.collectAsStateWithLifecycle(initialValue = PrinterConfig())
+
+    val shopsState by viewModel.shopsState.collectAsStateWithLifecycle()
+    val productsState by viewModel.productsState.collectAsStateWithLifecycle()
+    val customersState by viewModel.customersState.collectAsStateWithLifecycle()
+    val invoicesState by viewModel.invoicesState.collectAsStateWithLifecycle()
+    val draftBill by viewModel.draftBill.collectAsStateWithLifecycle()
+    val lastCreatedInvoice by viewModel.lastCreatedInvoice.collectAsStateWithLifecycle()
+    val statusMessage by viewModel.statusMessage.collectAsStateWithLifecycle()
+
+    var currentTab by rememberSaveable { mutableStateOf(BillingTab.NEW_BILL) }
+    var previewTarget by remember { mutableStateOf<Pair<Invoice, File>?>(null) }
+
+    BackHandler(enabled = currentTab != BillingTab.NEW_BILL) {
+        currentTab = BillingTab.NEW_BILL
     }
 
-    DisposableEffect(lifecycleOwner) {
-        val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) {
-                viewModel.refreshCompatibilityAndData()
-            }
-        }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
-    }
-
-    val navigateTab: (Any) -> Unit = { route ->
-        navController.navigate(route) {
-            popUpTo(DialerRoute) { saveState = true }
-            launchSingleTop = true
-            restoreState = true
-        }
-    }
-
-    LaunchedEffect(pendingDialNumber) {
-        if (!pendingDialNumber.isNullOrBlank()) {
-            viewModel.setDialNumber(pendingDialNumber)
-            navigateTab(DialerRoute)
-            onConsumePendingDial()
-        }
-    }
-
-    LaunchedEffect(uiMessage, playbackState.errorMessage) {
-        val msg = uiMessage ?: playbackState.errorMessage
+    LaunchedEffect(statusMessage) {
+        val msg = statusMessage
         if (!msg.isNullOrBlank()) {
             snackbarHostState.showSnackbar(msg)
-            viewModel.consumeMessage()
+            viewModel.consumeStatusMessage()
         }
     }
 
-    val currentDest = backStackEntry?.destination
+    fun resolveShopForInvoice(invoice: Invoice): ShopProfile? {
+        val shops = (shopsState as? UiState.Success)?.data ?: emptyList()
+        return shops.firstOrNull { it.id == invoice.shopId }
+            ?: shops.firstOrNull { it.shopName == invoice.shopName }
+            ?: viewModel.resolveActiveShop(shops)
+    }
+
+    fun launchPdfPreview(invoice: Invoice) {
+        scope.launch {
+            val shop = resolveShopForInvoice(invoice)
+            InvoicePdfGenerator.generateInvoicePdf(context, invoice, shop)
+                .onSuccess { (file, _) ->
+                    previewTarget = invoice to file
+                }
+                .onFailure {
+                    snackbarHostState.showSnackbar("Could not render PDF: ${it.localizedMessage}")
+                }
+        }
+    }
+
+    fun launchWhatsAppShare(invoice: Invoice) {
+        scope.launch {
+            val shop = resolveShopForInvoice(invoice)
+            InvoicePdfGenerator.generateInvoicePdf(context, invoice, shop)
+                .onSuccess { (_, uri) ->
+                    InvoicePdfGenerator.sharePdfToWhatsApp(context, uri, invoice)
+                }
+                .onFailure {
+                    snackbarHostState.showSnackbar("Failed to prepare WhatsApp PDF: ${it.localizedMessage}")
+                }
+        }
+    }
+
+    fun launchThermalPrint(invoice: Invoice) {
+        scope.launch {
+            if (!ThermalPrinterManager.hasBluetoothPermission(context)) {
+                snackbarHostState.showSnackbar("Allow Bluetooth permission in the Shops tab first.")
+                currentTab = BillingTab.SHOPS
+                return@launch
+            }
+            if (printerConfig.deviceAddress.isBlank()) {
+                snackbarHostState.showSnackbar("Select a paired Bluetooth thermal printer in the Shops tab.")
+                currentTab = BillingTab.SHOPS
+                return@launch
+            }
+            snackbarHostState.showSnackbar("Printing ${invoice.invoiceNumber} to ${printerConfig.deviceName}...")
+            val bytes = ThermalPrinterManager.buildEscPosReceipt(invoice, printerConfig.paperWidthMm)
+            ThermalPrinterManager.sendBytesToPrinter(context, printerConfig.deviceAddress, bytes)
+                .onSuccess {
+                    snackbarHostState.showSnackbar("Printed ${invoice.invoiceNumber} successfully!")
+                }
+                .onFailure {
+                    snackbarHostState.showSnackbar(it.localizedMessage ?: "Thermal print failed.")
+                }
+        }
+    }
+
+    fun launchTestPrint(cfg: PrinterConfig) {
+        scope.launch {
+            val activeShop = viewModel.resolveActiveShop((shopsState as? UiState.Success)?.data ?: emptyList())
+            val bytes = ThermalPrinterManager.buildTestReceipt(
+                shopName = activeShop?.shopName ?: "Narendra Billing",
+                paperWidthMm = cfg.paperWidthMm
+            )
+            ThermalPrinterManager.sendBytesToPrinter(context, cfg.deviceAddress, bytes)
+                .onSuccess { snackbarHostState.showSnackbar("Test print sent to ${cfg.deviceName}!") }
+                .onFailure { snackbarHostState.showSnackbar(it.localizedMessage ?: "Test print failed") }
+        }
+    }
 
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-        val useNavRail = maxWidth >= 600.dp
+        val useRail = maxWidth >= 700.dp
 
         Scaffold(
             topBar = {
                 CenterAlignedTopAppBar(
                     title = {
                         Text(
-                            text = stringResource(R.string.app_name),
+                            text = "Narendra Billing",
                             style = MaterialTheme.typography.titleLarge
                         )
                     },
                     colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
-                        containerColor = MaterialTheme.colorScheme.background,
-                        titleContentColor = MaterialTheme.colorScheme.onBackground
+                        containerColor = MaterialTheme.colorScheme.surface,
+                        titleContentColor = MaterialTheme.colorScheme.primary
                     )
                 )
             },
-            snackbarHost = { SnackbarHost(snackbarHostState) },
+            snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
             bottomBar = {
-                if (!useNavRail) {
-                    NavigationBar(
-                        containerColor = MaterialTheme.colorScheme.surface
-                    ) {
-                        NavigationBarItem(
-                            selected = currentDest?.hasRoute<DialerRoute>() == true,
-                            onClick = { navigateTab(DialerRoute) },
-                            icon = {
-                                Icon(
-                                    imageVector = if (currentDest?.hasRoute<DialerRoute>() == true) {
-                                        Icons.Filled.Dialpad
-                                    } else {
-                                        Icons.Outlined.Dialpad
-                                    },
-                                    contentDescription = stringResource(R.string.nav_dialer)
-                                )
-                            },
-                            label = {
-                                Text(
-                                    text = stringResource(R.string.nav_dialer),
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            },
-                            modifier = Modifier.testTag("nav_dialer_tab")
-                        )
-                        NavigationBarItem(
-                            selected = currentDest?.hasRoute<HistoryRoute>() == true,
-                            onClick = { navigateTab(HistoryRoute) },
-                            icon = {
-                                Icon(
-                                    imageVector = if (currentDest?.hasRoute<HistoryRoute>() == true) {
-                                        Icons.Filled.History
-                                    } else {
-                                        Icons.Outlined.History
-                                    },
-                                    contentDescription = stringResource(R.string.nav_history)
-                                )
-                            },
-                            label = {
-                                Text(
-                                    text = stringResource(R.string.nav_history),
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            },
-                            modifier = Modifier.testTag("nav_history_tab")
-                        )
-                        NavigationBarItem(
-                            selected = currentDest?.hasRoute<ContactsRoute>() == true,
-                            onClick = { navigateTab(ContactsRoute) },
-                            icon = {
-                                Icon(
-                                    imageVector = if (currentDest?.hasRoute<ContactsRoute>() == true) {
-                                        Icons.Filled.Contacts
-                                    } else {
-                                        Icons.Outlined.Contacts
-                                    },
-                                    contentDescription = stringResource(R.string.nav_contacts)
-                                )
-                            },
-                            label = {
-                                Text(
-                                    text = stringResource(R.string.nav_contacts),
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            },
-                            modifier = Modifier.testTag("nav_contacts_tab")
-                        )
-                        NavigationBarItem(
-                            selected = currentDest?.hasRoute<RecordingsRoute>() == true,
-                            onClick = { navigateTab(RecordingsRoute) },
-                            icon = {
-                                Icon(
-                                    imageVector = if (currentDest?.hasRoute<RecordingsRoute>() == true) {
-                                        Icons.Filled.LibraryMusic
-                                    } else {
-                                        Icons.Outlined.LibraryMusic
-                                    },
-                                    contentDescription = stringResource(R.string.nav_recordings)
-                                )
-                            },
-                            label = {
-                                Text(
-                                    text = stringResource(R.string.nav_recordings),
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            },
-                            modifier = Modifier.testTag("nav_recordings_tab")
-                        )
-                        NavigationBarItem(
-                            selected = currentDest?.hasRoute<SettingsRoute>() == true,
-                            onClick = { navigateTab(SettingsRoute) },
-                            icon = {
-                                Icon(
-                                    imageVector = if (currentDest?.hasRoute<SettingsRoute>() == true) {
-                                        Icons.Filled.Settings
-                                    } else {
-                                        Icons.Outlined.Settings
-                                    },
-                                    contentDescription = stringResource(R.string.nav_settings)
-                                )
-                            },
-                            label = {
-                                Text(
-                                    text = stringResource(R.string.nav_settings),
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            },
-                            modifier = Modifier.testTag("nav_settings_tab")
-                        )
+                if (!useRail) {
+                    NavigationBar {
+                        BillingTab.entries.forEach { tab ->
+                            NavigationBarItem(
+                                selected = currentTab == tab,
+                                onClick = { currentTab = tab },
+                                icon = { Icon(tab.icon, contentDescription = tab.label) },
+                                label = { Text(tab.label) },
+                                modifier = Modifier.testTag(tab.testTag)
+                            )
+                        }
                     }
                 }
             }
@@ -531,224 +263,75 @@ private fun MainAppShell(
                     .fillMaxSize()
                     .padding(innerPadding)
             ) {
-                if (useNavRail) {
-                    NavigationRail(
-                        containerColor = MaterialTheme.colorScheme.surface
-                    ) {
-                        NavigationRailItem(
-                            selected = currentDest?.hasRoute<DialerRoute>() == true,
-                            onClick = { navigateTab(DialerRoute) },
-                            icon = { Icon(Icons.Filled.Dialpad, contentDescription = stringResource(R.string.nav_dialer)) },
-                            label = { Text(stringResource(R.string.nav_dialer)) }
-                        )
-                        NavigationRailItem(
-                            selected = currentDest?.hasRoute<HistoryRoute>() == true,
-                            onClick = { navigateTab(HistoryRoute) },
-                            icon = { Icon(Icons.Filled.History, contentDescription = stringResource(R.string.nav_history)) },
-                            label = { Text(stringResource(R.string.nav_history)) }
-                        )
-                        NavigationRailItem(
-                            selected = currentDest?.hasRoute<ContactsRoute>() == true,
-                            onClick = { navigateTab(ContactsRoute) },
-                            icon = { Icon(Icons.Filled.Contacts, contentDescription = stringResource(R.string.nav_contacts)) },
-                            label = { Text(stringResource(R.string.nav_contacts)) }
-                        )
-                        NavigationRailItem(
-                            selected = currentDest?.hasRoute<RecordingsRoute>() == true,
-                            onClick = { navigateTab(RecordingsRoute) },
-                            icon = { Icon(Icons.Filled.LibraryMusic, contentDescription = stringResource(R.string.nav_recordings)) },
-                            label = { Text(stringResource(R.string.nav_recordings)) }
-                        )
-                        NavigationRailItem(
-                            selected = currentDest?.hasRoute<SettingsRoute>() == true,
-                            onClick = { navigateTab(SettingsRoute) },
-                            icon = { Icon(Icons.Filled.Settings, contentDescription = stringResource(R.string.nav_settings)) },
-                            label = { Text(stringResource(R.string.nav_settings)) }
-                        )
+                if (useRail) {
+                    NavigationRail {
+                        BillingTab.entries.forEach { tab ->
+                            NavigationRailItem(
+                                selected = currentTab == tab,
+                                onClick = { currentTab = tab },
+                                icon = { Icon(tab.icon, contentDescription = tab.label) },
+                                label = { Text(tab.label) },
+                                modifier = Modifier.testTag(tab.testTag)
+                            )
+                        }
                     }
                 }
 
-                Box(modifier = Modifier.weight(1f)) {
-                    NavHost(
-                        navController = navController,
-                        startDestination = DialerRoute
-                    ) {
-                        composable<DialerRoute> {
-                            DialerScreen(
-                                dialNumber = dialNumber,
-                                suggestedContacts = dialSuggestedContacts,
-                                settings = settings,
-                                compatibility = compatibility,
-                                activeSession = activeSession,
-                                onDigitPress = viewModel::appendDialDigit,
-                                onZeroLongPress = viewModel::replaceLastZeroWithPlus,
-                                onBackspace = viewModel::backspaceDial,
-                                onClearAll = viewModel::clearDial,
-                                onSelectContact = { contact ->
-                                    viewModel.setDialNumber(contact.number)
-                                },
-                                onCallClick = {
-                                    if (!compatibility.hasCallPhonePermission) {
-                                        permissionLauncher.launch(runtimePermissions)
-                                    }
-                                    viewModel.placeCall()
-                                },
-                                onRequestDefaultDialer = requestDefaultDialer,
-                                onToggleAutoRecord = { enabled ->
-                                    if (enabled && (!compatibility.hasRecordAudioPermission || !compatibility.hasPhoneStatePermission)) {
-                                        permissionLauncher.launch(runtimePermissions)
-                                    }
-                                    viewModel.setAutoRecordEnabled(enabled)
-                                },
-                                onStartManualRecording = {
-                                    if (compatibility.hasRecordAudioPermission) {
-                                        viewModel.startManualRecording()
-                                    } else {
-                                        permissionLauncher.launch(runtimePermissions)
-                                    }
-                                },
-                                onPauseRecording = viewModel::pauseRecording,
-                                onResumeRecording = viewModel::resumeRecording,
-                                onStopRecording = viewModel::stopRecording
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.TopCenter
+                ) {
+                    Box(modifier = Modifier.widthIn(max = 860.dp).fillMaxSize()) {
+                        when (currentTab) {
+                            BillingTab.NEW_BILL -> CreateBillScreen(
+                                viewModel = viewModel,
+                                shopsState = shopsState,
+                                productsState = productsState,
+                                customersState = customersState,
+                                draft = draftBill,
+                                lastCreatedInvoice = lastCreatedInvoice,
+                                onNavigateToShops = { currentTab = BillingTab.SHOPS },
+                                onPreviewPdf = ::launchPdfPreview,
+                                onShareWhatsApp = ::launchWhatsAppShare,
+                                onPrintThermal = ::launchThermalPrint
                             )
-                        }
-
-                        composable<HistoryRoute> {
-                            CallHistoryScreen(
-                                callLogs = filteredCallLogs,
-                                allRecordings = allRecordings,
-                                hasCallLogPermission = compatibility.hasCallLogPermission,
-                                filterType = callLogFilter,
-                                searchQuery = callLogSearch,
-                                onSearchChange = viewModel::setCallLogSearch,
-                                onFilterChange = viewModel::setCallLogFilter,
-                                onRequestCallLogPermission = { permissionLauncher.launch(runtimePermissions) },
-                                onRefresh = viewModel::refreshDeviceData,
-                                onCallNumber = { number ->
-                                    viewModel.setDialNumber(number)
-                                    if (!compatibility.hasCallPhonePermission) {
-                                        permissionLauncher.launch(runtimePermissions)
-                                    }
-                                    viewModel.placeCall(number)
-                                },
-                                onDeleteEntry = viewModel::deleteCallLogEntry,
-                                onClearAllLogs = { showClearLogsConfirm = true },
-                                onOpenRecording = { recording ->
-                                    viewModel.playOrToggle(recording)
-                                    navigateTab(RecordingsRoute)
+                            BillingTab.BILLS -> InvoicesScreen(
+                                viewModel = viewModel,
+                                invoicesState = invoicesState,
+                                onGoToNewBill = { currentTab = BillingTab.NEW_BILL },
+                                onPreviewPdf = ::launchPdfPreview,
+                                onShareWhatsApp = ::launchWhatsAppShare,
+                                onPrintThermal = ::launchThermalPrint
+                            )
+                            BillingTab.CATALOG -> CatalogScreen(
+                                viewModel = viewModel,
+                                productsState = productsState,
+                                customersState = customersState,
+                                onBillCustomer = { customer ->
+                                    viewModel.selectCustomer(customer)
+                                    currentTab = BillingTab.NEW_BILL
                                 }
                             )
-                        }
-
-                        composable<ContactsRoute> {
-                            ContactsScreen(
-                                contacts = filteredContacts,
-                                hasContactsPermission = compatibility.hasContactsPermission,
-                                searchQuery = contactSearch,
-                                onSearchChange = viewModel::setContactSearch,
-                                onRequestContactsPermission = { permissionLauncher.launch(runtimePermissions) },
-                                onRefresh = viewModel::refreshDeviceData,
-                                onCallContact = { contact ->
-                                    viewModel.setDialNumber(contact.number)
-                                    if (!compatibility.hasCallPhonePermission) {
-                                        permissionLauncher.launch(runtimePermissions)
-                                    }
-                                    viewModel.placeCall(contact.number)
+                            BillingTab.GST_CALC -> GstCalculatorScreen(
+                                onAddToBill = { amount, gst, incl, inter ->
+                                    viewModel.prefillAmountFromCalculator(amount, gst, incl, inter)
+                                    currentTab = BillingTab.NEW_BILL
                                 }
                             )
-                        }
-
-                        composable<RecordingsRoute> {
-                            RecordingsScreen(
-                                recordings = filteredRecordings,
-                                totalStorageBytes = stats.storageUsedBytes,
-                                searchQuery = searchQuery,
-                                sortOption = sortOption,
-                                directionFilter = directionFilter,
-                                playbackState = playbackState,
-                                onSearchChange = viewModel::updateSearchQuery,
-                                onSortChange = viewModel::updateSortOption,
-                                onDirectionFilterChange = viewModel::updateDirectionFilter,
-                                onPlayToggle = viewModel::playOrToggle,
-                                onSeekPlayback = viewModel::seekPlayback,
-                                onRenameRecording = { recordingToRename = it },
-                                onShareRecording = { rec ->
-                                    viewModel.buildShareIntent(rec)?.let { context.startActivity(it) }
+                            BillingTab.SHOPS -> ShopsAndPrinterScreen(
+                                viewModel = viewModel,
+                                shopsState = shopsState,
+                                printerConfig = printerConfig,
+                                onSelectPrinter = { name, addr ->
+                                    scope.launch { printerPrefs.setPrinter(name, addr) }
                                 },
-                                onDeleteRecording = { recordingToDelete = it }
-                            )
-                        }
-
-                        composable<SettingsRoute> {
-                            SettingsScreen(
-                                settings = settings,
-                                contactRules = contactRules,
-                                compatibility = compatibility,
-                                carrierStatusMessage = carrierStatusMessage,
-                                storageUsedBytes = stats.storageUsedBytes,
-                                isBackupBusy = isBackupBusy,
-                                isBiometricHardwareAvailable = isBiometricAvailable,
-                                onRequestDefaultDialer = requestDefaultDialer,
-                                onOpenBatteryOptimization = {
-                                    DeviceCompatHelper.openBatteryOptimizationSettings(context)
+                                onSelectPaperWidth = { mm ->
+                                    scope.launch { printerPrefs.setPaperWidth(mm) }
                                 },
-                                onOpenOemAutoStart = {
-                                    DeviceCompatHelper.openOemAutoStartSettings(context)
-                                },
-                                onOpenSystemCallSettings = {
-                                    DeviceCompatHelper.openSystemCallSettings(context)
-                                },
-                                onCallWaitingChange = { enable ->
-                                    if (!compatibility.hasCallPhonePermission) {
-                                        permissionLauncher.launch(runtimePermissions)
-                                    }
-                                    viewModel.setCallWaiting(enable)
-                                },
-                                onCheckCallWaitingStatus = {
-                                    if (!compatibility.hasCallPhonePermission) {
-                                        permissionLauncher.launch(runtimePermissions)
-                                    }
-                                    viewModel.checkCallWaitingStatus()
-                                },
-                                onOpenCallForwardingDialog = { showCallForwardingDialog = true },
-                                onCancelAllCallForwarding = {
-                                    if (!compatibility.hasCallPhonePermission) {
-                                        permissionLauncher.launch(runtimePermissions)
-                                    }
-                                    viewModel.cancelAllCallForwarding()
-                                },
-                                onToggleAutoRecord = { enabled ->
-                                    if (enabled && (!compatibility.hasRecordAudioPermission || !compatibility.hasPhoneStatePermission)) {
-                                        permissionLauncher.launch(runtimePermissions)
-                                    }
-                                    viewModel.setAutoRecordEnabled(enabled)
-                                },
-                                onToggleAutoIncoming = viewModel::setAutoRecordIncoming,
-                                onToggleAutoOutgoing = viewModel::setAutoRecordOutgoing,
-                                onSelectFilterMode = viewModel::setFilterMode,
-                                onAddContactRuleClick = { type -> addRuleDialogType = type },
-                                onDeleteContactRule = viewModel::deleteContactRule,
-                                onSelectFormat = viewModel::setAudioFormat,
-                                onSelectQuality = viewModel::setAudioQuality,
-                                onTogglePreferTwoWay = viewModel::setPreferTwoWayAttempt,
-                                onToggleDarkMode = viewModel::setDarkModeEnabled,
-                                onTogglePinLock = { enable ->
-                                    if (enable) {
-                                        showSetPinDialog = true
-                                    } else {
-                                        viewModel.disablePinLock()
-                                    }
-                                },
-                                onToggleBiometricLock = viewModel::setBiometricLockEnabled,
-                                onLockNow = viewModel::lockNowIfConfigured,
-                                onToggleRecordingNotif = viewModel::setShowRecordingNotification,
-                                onToggleSavedNotif = viewModel::setShowSavedNotification,
-                                onShowCompatibilityDialog = { showCompatibilityDialog = true },
-                                onShowConsentDialog = { showConsentDialogManual = true },
-                                onRequestExportBackup = { backupConsentExport = true },
-                                onRequestRestoreBackup = { backupConsentExport = false },
-                                onRequestDeleteAll = { showDeleteAllConfirm = true },
-                                onRequestResetAppData = { showResetAppDataConfirm = true }
+                                onTestPrint = ::launchTestPrint,
+                                onShowMessage = { msg ->
+                                    scope.launch { snackbarHostState.showSnackbar(msg) }
+                                }
                             )
                         }
                     }
@@ -757,178 +340,13 @@ private fun MainAppShell(
         }
     }
 
-    if (!settings.consentAccepted || showConsentDialogManual) {
-        ConsentDialog(
-            onAccept = {
-                viewModel.acceptConsent()
-                showConsentDialogManual = false
-            },
-            onDismiss = if (settings.consentAccepted) {
-                { showConsentDialogManual = false }
-            } else {
-                null
-            }
+    previewTarget?.let { (invoice, file) ->
+        PdfPreviewDialog(
+            invoice = invoice,
+            pdfFile = file,
+            onDismiss = { previewTarget = null },
+            onShareWhatsApp = { launchWhatsAppShare(invoice) },
+            onPrintThermal = { launchThermalPrint(invoice) }
         )
     }
-
-    if (showCompatibilityDialog) {
-        CompatibilityDetailsDialog(
-            status = compatibility,
-            onRequestPermissions = { permissionLauncher.launch(runtimePermissions) },
-            onRequestDefaultDialer = requestDefaultDialer,
-            onOpenAutoStart = { DeviceCompatHelper.openOemAutoStartSettings(context) },
-            onDismiss = { showCompatibilityDialog = false }
-        )
-    }
-
-    if (showCallForwardingDialog) {
-        CallForwardingDialog(
-            carrierStatusMessage = carrierStatusMessage,
-            onActivate = { cond, number ->
-                if (!compatibility.hasCallPhonePermission) {
-                    permissionLauncher.launch(runtimePermissions)
-                }
-                viewModel.activateCallForwarding(cond, number)
-            },
-            onDeactivate = viewModel::deactivateCallForwarding,
-            onCheckStatus = viewModel::checkCallForwardingStatus,
-            onCancelAll = viewModel::cancelAllCallForwarding,
-            onDismiss = { showCallForwardingDialog = false }
-        )
-    }
-
-    recordingToRename?.let { target ->
-        RenameRecordingDialog(
-            initialTitle = target.title,
-            onConfirm = { newTitle ->
-                viewModel.renameRecording(target.id, newTitle)
-                recordingToRename = null
-            },
-            onDismiss = { recordingToRename = null }
-        )
-    }
-
-    recordingToDelete?.let { target ->
-        DeleteConfirmDialog(
-            title = "Delete Recording?",
-            message = "Delete \"${target.title}\" permanently from device storage?",
-            onConfirm = {
-                viewModel.deleteRecording(target)
-                recordingToDelete = null
-            },
-            onDismiss = { recordingToDelete = null }
-        )
-    }
-
-    if (showDeleteAllConfirm) {
-        DeleteConfirmDialog(
-            title = "Delete All Recordings?",
-            message = "This will permanently remove all audio files stored by Narendra Phone.",
-            onConfirm = {
-                viewModel.deleteAllRecordings()
-                showDeleteAllConfirm = false
-            },
-            onDismiss = { showDeleteAllConfirm = false }
-        )
-    }
-
-    if (showClearLogsConfirm) {
-        DeleteConfirmDialog(
-            title = "Clear Call History?",
-            message = "This will permanently delete all entries from your device Call Log.",
-            confirmLabel = "Clear Logs",
-            onConfirm = {
-                viewModel.clearAllCallLogs()
-                showClearLogsConfirm = false
-            },
-            onDismiss = { showClearLogsConfirm = false }
-        )
-    }
-
-    if (showResetAppDataConfirm) {
-        DeleteConfirmDialog(
-            title = "Reset All App Data?",
-            message = "This deletes all local recordings, contact rules, disables auto-record, and resets PIN/fingerprint lock settings.",
-            confirmLabel = "Reset All",
-            onConfirm = {
-                viewModel.resetAllAppData()
-                showResetAppDataConfirm = false
-            },
-            onDismiss = { showResetAppDataConfirm = false }
-        )
-    }
-
-    addRuleDialogType?.let { type ->
-        AddContactRuleDialog(
-            ruleType = type,
-            onPickFromContacts = {
-                pendingPickRuleType = type
-                contactPickerLauncher.launch(null)
-            },
-            onAddManual = { number, name ->
-                viewModel.addContactRule(number, name, type)
-                addRuleDialogType = null
-            },
-            onDismiss = { addRuleDialogType = null }
-        )
-    }
-
-    if (showSetPinDialog) {
-        SetPinDialog(
-            onConfirmPin = { pin ->
-                viewModel.enablePinLock(pin)
-                showSetPinDialog = false
-            },
-            onDismiss = { showSetPinDialog = false }
-        )
-    }
-
-    backupConsentExport?.let { isExport ->
-        BackupConsentDialog(
-            isExport = isExport,
-            onConfirm = {
-                backupConsentExport = null
-                if (isExport) {
-                    val stamp = SimpleDateFormat("yyyyMMdd_HHmm", Locale.US).format(Date())
-                    exportBackupLauncher.launch("NarendraPhone_Backup_$stamp.zip")
-                } else {
-                    restoreBackupLauncher.launch(arrayOf("application/zip", "application/octet-stream"))
-                }
-            },
-            onDismiss = { backupConsentExport = null }
-        )
-    }
-}
-
-private fun extractContactPhoneAndName(
-    context: android.content.Context,
-    contactUri: Uri
-): Pair<String, String>? {
-    return runCatching {
-        context.contentResolver.query(
-            contactUri,
-            arrayOf(ContactsContract.Contacts._ID, ContactsContract.Contacts.DISPLAY_NAME),
-            null,
-            null,
-            null
-        )?.use { cursor ->
-            if (!cursor.moveToFirst()) return@use null
-            val id = cursor.getString(0) ?: return@use null
-            val name = cursor.getString(1) ?: ""
-            context.contentResolver.query(
-                ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
-                arrayOf(ContactsContract.CommonDataKinds.Phone.NUMBER),
-                "${ContactsContract.CommonDataKinds.Phone.CONTACT_ID} = ?",
-                arrayOf(id),
-                null
-            )?.use { phoneCursor ->
-                if (phoneCursor.moveToFirst()) {
-                    val phone = phoneCursor.getString(0) ?: ""
-                    if (phone.isNotBlank()) Pair(phone, name) else null
-                } else {
-                    null
-                }
-            }
-        }
-    }.getOrNull()
 }

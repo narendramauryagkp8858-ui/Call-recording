@@ -1,0 +1,210 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidShop(data) {
+      return data.shopName is string && data.shopName.size() >= 1 && data.shopName.size() <= 120 &&
+             data.gstin is string && data.gstin.size() <= 20 &&
+             data.phone is string && data.phone.size() <= 20 &&
+             data.address is string && data.address.size() <= 300 &&
+             data.stateName is string && data.stateName.size() <= 60 &&
+             data.invoicePrefix is string && data.invoicePrefix.size() >= 1 && data.invoicePrefix.size() <= 16 &&
+             data.nextInvoiceNumber is int && data.nextInvoiceNumber >= 1 && data.nextInvoiceNumber <= 10000000 &&
+             data.termsAndConditions is string && data.termsAndConditions.size() <= 400 &&
+             data.stampBase64 is string && data.stampBase64.size() <= 180000 &&
+             data.signatureBase64 is string && data.signatureBase64.size() <= 180000 &&
+             data.defaultActive is bool &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidProduct(data) {
+      return data.name is string && data.name.size() >= 1 && data.name.size() <= 120 &&
+             data.hsnCode is string && data.hsnCode.size() <= 20 &&
+             data.unit is string && data.unit.size() >= 1 && data.unit.size() <= 20 &&
+             data.purchaseRate is number && data.purchaseRate >= 0 && data.purchaseRate <= 100000000 &&
+             data.sellingRate is number && data.sellingRate >= 0 && data.sellingRate <= 100000000 &&
+             data.gstRate is number && data.gstRate >= 0 && data.gstRate <= 100 &&
+             data.taxInclusive is bool &&
+             data.stockQty is number && data.stockQty >= 0 && data.stockQty <= 10000000 &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidCustomer(data) {
+      return data.name is string && data.name.size() >= 1 && data.name.size() <= 120 &&
+             data.phone is string && data.phone.size() <= 20 &&
+             data.address is string && data.address.size() <= 300 &&
+             data.gstin is string && data.gstin.size() <= 20 &&
+             data.stateName is string && data.stateName.size() <= 60 &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidInvoice(data) {
+      return data.invoiceNumber is string && data.invoiceNumber.size() >= 1 && data.invoiceNumber.size() <= 40 &&
+             data.shopId is string && data.shopId.size() >= 1 && data.shopId.size() <= 128 &&
+             data.shopName is string && data.shopName.size() >= 1 && data.shopName.size() <= 120 &&
+             data.shopGstin is string && data.shopGstin.size() <= 20 &&
+             data.shopPhone is string && data.shopPhone.size() <= 20 &&
+             data.shopAddress is string && data.shopAddress.size() <= 300 &&
+             data.customerId is string && data.customerId.size() <= 128 &&
+             data.customerName is string && data.customerName.size() >= 1 && data.customerName.size() <= 120 &&
+             data.customerPhone is string && data.customerPhone.size() <= 20 &&
+             data.customerAddress is string && data.customerAddress.size() <= 300 &&
+             data.customerGstin is string && data.customerGstin.size() <= 20 &&
+             data.interState is bool &&
+             data.includeStamp is bool &&
+             data.includeSignature is bool &&
+             data.items is list && data.items.size() >= 1 && data.items.size() <= 50 && data.items[0] is map &&
+             data.subtotalTaxable is number && data.subtotalTaxable >= 0 && data.subtotalTaxable <= 1000000000 &&
+             data.cgstAmount is number && data.cgstAmount >= 0 && data.cgstAmount <= 1000000000 &&
+             data.sgstAmount is number && data.sgstAmount >= 0 && data.sgstAmount <= 1000000000 &&
+             data.igstAmount is number && data.igstAmount >= 0 && data.igstAmount <= 1000000000 &&
+             data.totalGstAmount is number && data.totalGstAmount >= 0 && data.totalGstAmount <= 1000000000 &&
+             data.grandTotal is number && data.grandTotal >= 0 && data.grandTotal <= 1000000000 &&
+             data.estimatedProfit is number && data.estimatedProfit >= -1000000000 && data.estimatedProfit <= 1000000000 &&
+             data.paymentMode in ['CASH', 'UPI', 'CARD', 'CREDIT'] &&
+             data.notes is string && data.notes.size() <= 300 &&
+             data.issuedAtMillis is int && data.issuedAtMillis > 0 &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    match /users/{userId} {
+      allow read, write: if false;
+
+      match /shops/{shopId} {
+        allow get: if isOwner(userId) && isValidId(shopId);
+        allow list: if isOwner(userId);
+        allow create: if isOwner(userId) &&
+                         isValidId(shopId) &&
+                         incoming().keys().hasAll([
+                           'shopName', 'gstin', 'phone', 'address', 'stateName', 'invoicePrefix',
+                           'nextInvoiceNumber', 'termsAndConditions', 'stampBase64', 'signatureBase64',
+                           'defaultActive', 'createdAt', 'updatedAt'
+                         ]) &&
+                         incoming().keys().hasOnly([
+                           'shopName', 'gstin', 'phone', 'address', 'stateName', 'invoicePrefix',
+                           'nextInvoiceNumber', 'termsAndConditions', 'stampBase64', 'signatureBase64',
+                           'defaultActive', 'createdAt', 'updatedAt'
+                         ]) &&
+                         isValidShop(incoming());
+        allow update: if isOwner(userId) &&
+                         isValidId(shopId) &&
+                         isValidShop(incoming()) &&
+                         incoming().createdAt == existing().createdAt &&
+                         incoming().diff(existing()).affectedKeys().hasOnly([
+                           'shopName', 'gstin', 'phone', 'address', 'stateName', 'invoicePrefix',
+                           'nextInvoiceNumber', 'termsAndConditions', 'stampBase64', 'signatureBase64',
+                           'defaultActive', 'updatedAt'
+                         ]);
+        allow delete: if isOwner(userId) && isValidId(shopId);
+      }
+
+      match /products/{productId} {
+        allow get: if isOwner(userId) && isValidId(productId);
+        allow list: if isOwner(userId);
+        allow create: if isOwner(userId) &&
+                         isValidId(productId) &&
+                         incoming().keys().hasAll([
+                           'name', 'hsnCode', 'unit', 'purchaseRate', 'sellingRate',
+                           'gstRate', 'taxInclusive', 'stockQty', 'createdAt', 'updatedAt'
+                         ]) &&
+                         incoming().keys().hasOnly([
+                           'name', 'hsnCode', 'unit', 'purchaseRate', 'sellingRate',
+                           'gstRate', 'taxInclusive', 'stockQty', 'createdAt', 'updatedAt'
+                         ]) &&
+                         isValidProduct(incoming());
+        allow update: if isOwner(userId) &&
+                         isValidId(productId) &&
+                         isValidProduct(incoming()) &&
+                         incoming().createdAt == existing().createdAt &&
+                         incoming().diff(existing()).affectedKeys().hasOnly([
+                           'name', 'hsnCode', 'unit', 'purchaseRate', 'sellingRate',
+                           'gstRate', 'taxInclusive', 'stockQty', 'updatedAt'
+                         ]);
+        allow delete: if isOwner(userId) && isValidId(productId);
+      }
+
+      match /customers/{customerId} {
+        allow get: if isOwner(userId) && isValidId(customerId);
+        allow list: if isOwner(userId);
+        allow create: if isOwner(userId) &&
+                         isValidId(customerId) &&
+                         incoming().keys().hasAll([
+                           'name', 'phone', 'address', 'gstin', 'stateName', 'createdAt', 'updatedAt'
+                         ]) &&
+                         incoming().keys().hasOnly([
+                           'name', 'phone', 'address', 'gstin', 'stateName', 'createdAt', 'updatedAt'
+                         ]) &&
+                         isValidCustomer(incoming());
+        allow update: if isOwner(userId) &&
+                         isValidId(customerId) &&
+                         isValidCustomer(incoming()) &&
+                         incoming().createdAt == existing().createdAt &&
+                         incoming().diff(existing()).affectedKeys().hasOnly([
+                           'name', 'phone', 'address', 'gstin', 'stateName', 'updatedAt'
+                         ]);
+        allow delete: if isOwner(userId) && isValidId(customerId);
+      }
+
+      match /invoices/{invoiceId} {
+        allow get: if isOwner(userId) && isValidId(invoiceId);
+        allow list: if isOwner(userId);
+        allow create: if isOwner(userId) &&
+                         isValidId(invoiceId) &&
+                         incoming().keys().hasAll([
+                           'invoiceNumber', 'shopId', 'shopName', 'shopGstin', 'shopPhone', 'shopAddress',
+                           'customerId', 'customerName', 'customerPhone', 'customerAddress', 'customerGstin',
+                           'interState', 'includeStamp', 'includeSignature', 'items',
+                           'subtotalTaxable', 'cgstAmount', 'sgstAmount', 'igstAmount', 'totalGstAmount',
+                           'grandTotal', 'estimatedProfit', 'paymentMode', 'notes', 'issuedAtMillis',
+                           'createdAt', 'updatedAt'
+                         ]) &&
+                         incoming().keys().hasOnly([
+                           'invoiceNumber', 'shopId', 'shopName', 'shopGstin', 'shopPhone', 'shopAddress',
+                           'customerId', 'customerName', 'customerPhone', 'customerAddress', 'customerGstin',
+                           'interState', 'includeStamp', 'includeSignature', 'items',
+                           'subtotalTaxable', 'cgstAmount', 'sgstAmount', 'igstAmount', 'totalGstAmount',
+                           'grandTotal', 'estimatedProfit', 'paymentMode', 'notes', 'issuedAtMillis',
+                           'createdAt', 'updatedAt'
+                         ]) &&
+                         isValidInvoice(incoming());
+        allow update: if isOwner(userId) &&
+                         isValidId(invoiceId) &&
+                         isValidInvoice(incoming()) &&
+                         incoming().createdAt == existing().createdAt &&
+                         incoming().diff(existing()).affectedKeys().hasOnly([
+                           'includeStamp', 'includeSignature', 'paymentMode', 'notes', 'updatedAt'
+                         ]);
+        allow delete: if isOwner(userId) && isValidId(invoiceId);
+      }
+    }
+  }
+}
