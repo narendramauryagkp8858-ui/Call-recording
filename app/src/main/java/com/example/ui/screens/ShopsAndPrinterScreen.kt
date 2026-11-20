@@ -72,7 +72,6 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
-import androidx.credentials.CredentialManager
 import com.example.billing.ImageStampHelper
 import com.example.billing.PrinterDeviceInfo
 import com.example.billing.ThermalPrinterManager
@@ -101,7 +100,6 @@ fun ShopsAndPrinterScreen(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val credentialManager = remember(context) { CredentialManager.create(context) }
 
     var editingShop by remember { mutableStateOf<ShopProfile?>(null) }
     var showAddShop by remember { mutableStateOf(false) }
@@ -341,12 +339,16 @@ fun ShopsAndPrinterScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
-                        Text("Google Account", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Text(user?.displayName ?: "Merchant", style = MaterialTheme.typography.titleSmall)
-                        Text(user?.email ?: "", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text("Mobile Account", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(
+                            text = user?.phoneNumber?.takeIf { it.isNotBlank() } ?: user?.displayName?.takeIf { it.isNotBlank() } ?: "Shopkeeper",
+                            style = MaterialTheme.typography.titleSmall
+                        )
+                        val secondary = user?.email?.takeIf { it.isNotBlank() } ?: "Synced with Firebase Cloud"
+                        Text(secondary, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     OutlinedButton(
-                        onClick = { signOut(credentialManager, scope) },
+                        onClick = { signOut(scope) },
                         modifier = Modifier
                             .heightIn(min = 48.dp)
                             .testTag("sign_out_button")

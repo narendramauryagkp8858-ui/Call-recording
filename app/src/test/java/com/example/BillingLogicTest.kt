@@ -4,8 +4,10 @@ import com.example.billing.GstCalculator
 import com.example.billing.ThermalPrinterManager
 import com.example.data.Invoice
 import com.example.data.PaymentMode
+import com.example.data.formatE164PhoneNumber
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -98,5 +100,13 @@ class BillingLogicTest {
             "Rupees One Lakh Twenty Five Thousand Four Hundred Fifty and Fifty Paise Only",
             words
         )
+    }
+
+    @Test
+    fun formatE164PhoneNumber_formatsIndianAndInternationalNumbers() {
+        assertEquals("+919876543210", formatE164PhoneNumber("+91", "98765 43210"))
+        assertEquals("+14155552671", formatE164PhoneNumber("+1", "4155552671"))
+        assertEquals("+919876543210", formatE164PhoneNumber("+1", "+91 9876543210"))
+        assertNull(formatE164PhoneNumber("+91", "12345"))
     }
 }
