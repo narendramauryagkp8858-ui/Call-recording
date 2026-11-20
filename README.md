@@ -62,9 +62,14 @@
 
 ### Option 2: Build in Android Studio (Desktop)
 1. Open the root project folder in **Android Studio (Ladybug / Meerkat or newer)** with **JDK 17**.
-2. Let Gradle sync (`Gradle 9.3.1`).
-3. Run unit tests: `./gradlew testDebugUnitTest` (or `gradle testDebugUnitTest`).
-4. Generate Debug APK: **Build → Build Bundle(s) / APK(s) → Build APK(s)** (output at `app/build/outputs/apk/debug/app-debug.apk`).
+2. In Android Studio **Settings → Languages & Frameworks → Android SDK**, ensure **Android SDK Platform 36** (and Command-line Tools) is installed.
+3. Let Gradle sync (`Gradle 9.3.1`).
+4. Run unit tests: `gradle testDebugUnitTest` (or via Android Studio Gradle panel).
+5. Generate Debug APK: **Build → Build Bundle(s) / APK(s) → Build APK(s)** (output at `app/build/outputs/apk/debug/app-debug.apk`).
+
+### Troubleshooting "Set up Android SDK" Errors
+- **GitHub Actions**: `.github/workflows/main.yml` uses `android-actions/setup-android@v4` (replacing legacy `@v3` which can fail on newer `ubuntu-latest` runners) and automatically accepts SDK licenses so AGP 9.1.1 can download `compileSdk 36.1`.
+- **Android Studio / Local CLI**: If Gradle reports SDK not found, install Android SDK via Android Studio's SDK Manager and ensure `ANDROID_HOME` points to your SDK folder.
 
 ---
 
