@@ -201,9 +201,9 @@ fun AuthScreen(
                                 isLoading = false
                                 errorMessage = msg
                             },
-                            onAuthCancelled = {
+                            onAuthCancelled = { diagnostic ->
                                 isLoading = false
-                                errorMessage = "Sign-in was cancelled. Make sure a Google account is added on your phone and tap Sign in with Google again."
+                                errorMessage = "Google Sign-In did not complete. Make sure a Google account is active on this phone (Settings > Google > Sign in with Google) and try again.\n$diagnostic"
                             }
                         )
                     },

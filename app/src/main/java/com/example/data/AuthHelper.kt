@@ -3,6 +3,8 @@ package com.example.data
 import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
+import android.content.pm.PackageManager
+import android.os.Build
 import android.util.Log
 import androidx.credentials.ClearCredentialStateRequest
 import androidx.credentials.CredentialManager
@@ -10,6 +12,8 @@ import androidx.credentials.CustomCredential
 import androidx.credentials.GetCredentialRequest
 import androidx.credentials.exceptions.GetCredentialCancellationException
 import androidx.credentials.exceptions.GetCredentialException
+import androidx.credentials.exceptions.GetCredentialProviderConfigurationException
+import androidx.credentials.exceptions.GetCredentialUnsupportedException
 import androidx.credentials.exceptions.NoCredentialException
 import com.example.R
 import com.google.android.libraries.identity.googleid.GetGoogleIdOption
@@ -31,6 +35,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import java.security.MessageDigest
 
 private const val AUTH_TAG = "Auth"
 private const val MISSING_CONFIG_PLACEHOLDER = "missing-google-services-json"
@@ -39,6 +44,27 @@ private tailrec fun Context.findActivity(): Activity? = when (this) {
     is Activity -> this
     is ContextWrapper -> baseContext.findActivity()
     else -> null
+}
+
+@Suppress("DEPRECATION")
+private fun getAppSigningSha1(context: Context): String {
+    return try {
+        val pm = context.packageManager
+        val signatures = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            val info = pm.getPackageInfo(context.packageName, PackageManager.GET_SIGNING_CERTIFICATES)
+            info.signingInfo?.let { si ->
+                if (si.hasMultipleSigners()) si.apkContentsSigners else si.signingCertificateHistory
+            }
+        } else {
+            val info = pm.getPackageInfo(context.packageName, PackageManager.GET_SIGNATURES)
+            info.signatures
+        }
+        val certBytes = signatures?.firstOrNull()?.toByteArray() ?: return "unknown"
+        val digest = MessageDigest.getInstance("SHA-1").digest(certBytes)
+        digest.joinToString(":") { "%02X".format(it) }
+    } catch (_: Exception) {
+        "unknown"
+    }
 }
 
 fun FirebaseAuth.authStateFlow(): Flow<FirebaseUser?> = callbackFlow {
@@ -61,7 +87,7 @@ fun attemptAutoSignIn(
         return
     }
     val clientId = try {
-        context.getString(R.string.default_web_client_id)
+        context.getString(R.string.default_web_client_id).trim()
     } catch (_: Exception) {
         onUnauthenticated()
         return
@@ -106,10 +132,10 @@ fun onGoogleSignInClicked(
     scope: CoroutineScope,
     onAuthSuccess: () -> Unit,
     onAuthError: (String) -> Unit,
-    onAuthCancelled: () -> Unit = {}
+    onAuthCancelled: (diagnostic: String) -> Unit = {}
 ) {
     val clientId = try {
-        context.getString(R.string.default_web_client_id)
+        context.getString(R.string.default_web_client_id).trim()
     } catch (_: Exception) {
         onAuthError("Google Sign-In configuration missing: default_web_client_id not found")
         return
@@ -118,6 +144,10 @@ fun onGoogleSignInClicked(
         onAuthError("Google Sign-In is not configured in this APK (missing google-services.json). Add GOOGLE_SERVICES_JSON secret in GitHub Settings -> Secrets -> Actions and rebuild.")
         return
     }
+
+    val sha1 = getAppSigningSha1(context)
+    val clientSuffix = clientId.substringBefore('.').takeLast(12)
+
     val signInOption = GetSignInWithGoogleOption.Builder(serverClientId = clientId).build()
     val request = GetCredentialRequest.Builder()
         .addCredentialOption(signInOption)
@@ -137,13 +167,21 @@ fun onGoogleSignInClicked(
             throw e
         } catch (e: GetCredentialCancellationException) {
             Log.w(AUTH_TAG, "Google Sign-In flow cancelled or dismissed: ${e.message}", e)
-            onAuthCancelled()
+            val reason = e.message?.takeIf { it.isNotBlank() } ?: "cancelled"
+            onAuthCancelled("Details: $reason | SHA1: $sha1 | Client: ...$clientSuffix")
         } catch (e: NoCredentialException) {
             Log.w(AUTH_TAG, "No Google credential available on device: ${e.message}", e)
-            onAuthError("No Google account found on this device. Please add a Google account in Settings > Accounts and try again.")
+            onAuthError("No Google account found or Google Sign-In prompts disabled in phone Settings > Google > Sign in with Google. (SHA1: $sha1)")
+        } catch (e: GetCredentialProviderConfigurationException) {
+            Log.e(AUTH_TAG, "Credential provider configuration error: ${e.message}", e)
+            onAuthError("Google Play Services Credential Manager is unavailable or outdated on this phone. Please update Google Play Services.")
+        } catch (e: GetCredentialUnsupportedException) {
+            Log.e(AUTH_TAG, "Credential Manager unsupported: ${e.message}", e)
+            onAuthError("Credential Manager is not supported on this device/Play Services version. Please update Google Play Services.")
         } catch (e: GetCredentialException) {
             Log.e(AUTH_TAG, "Credential Manager error: ${e.type} - ${e.message}", e)
-            onAuthError(e.errorMessage?.toString() ?: e.localizedMessage ?: "Google Sign-In failed (${e.type}).")
+            val msg = e.errorMessage?.toString() ?: e.localizedMessage ?: "Google Sign-In failed (${e.type})."
+            onAuthError("$msg (SHA1: $sha1 | Client: ...$clientSuffix)")
         } catch (e: Exception) {
             Log.e(AUTH_TAG, "Google Sign-In failed", e)
             onAuthError(e.localizedMessage ?: "Sign in failed. Please try again.")
