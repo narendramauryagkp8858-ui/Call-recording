@@ -52,6 +52,7 @@ service cloud.firestore {
              data.gstRate is number && data.gstRate >= 0 && data.gstRate <= 100 &&
              data.taxInclusive is bool &&
              data.stockQty is number && data.stockQty >= 0 && data.stockQty <= 10000000 &&
+             (!('lowStockThreshold' in data) || (data.lowStockThreshold is number && data.lowStockThreshold >= 0 && data.lowStockThreshold <= 10000000)) &&
              data.createdAt is timestamp && data.createdAt <= request.time &&
              data.updatedAt is timestamp && data.updatedAt <= request.time;
     }
@@ -138,7 +139,7 @@ service cloud.firestore {
                          ]) &&
                          incoming().keys().hasOnly([
                            'name', 'hsnCode', 'unit', 'purchaseRate', 'sellingRate',
-                           'gstRate', 'taxInclusive', 'stockQty', 'createdAt', 'updatedAt'
+                           'gstRate', 'taxInclusive', 'stockQty', 'lowStockThreshold', 'createdAt', 'updatedAt'
                          ]) &&
                          isValidProduct(incoming());
         allow update: if isOwner(userId) &&
@@ -147,7 +148,7 @@ service cloud.firestore {
                          incoming().createdAt == existing().createdAt &&
                          incoming().diff(existing()).affectedKeys().hasOnly([
                            'name', 'hsnCode', 'unit', 'purchaseRate', 'sellingRate',
-                           'gstRate', 'taxInclusive', 'stockQty', 'updatedAt'
+                           'gstRate', 'taxInclusive', 'stockQty', 'lowStockThreshold', 'updatedAt'
                          ]);
         allow delete: if isOwner(userId) && isValidId(productId);
       }
@@ -200,8 +201,15 @@ service cloud.firestore {
                          isValidId(invoiceId) &&
                          isValidInvoice(incoming()) &&
                          incoming().createdAt == existing().createdAt &&
+                         incoming().invoiceNumber == existing().invoiceNumber &&
+                         incoming().shopId == existing().shopId &&
+                         incoming().issuedAtMillis == existing().issuedAtMillis &&
                          incoming().diff(existing()).affectedKeys().hasOnly([
-                           'includeStamp', 'includeSignature', 'paymentMode', 'notes', 'updatedAt'
+                           'customerId', 'customerName', 'customerPhone', 'customerAddress', 'customerGstin',
+                           'interState', 'includeStamp', 'includeSignature', 'items',
+                           'subtotalTaxable', 'cgstAmount', 'sgstAmount', 'igstAmount',
+                           'totalGstAmount', 'grandTotal', 'estimatedProfit',
+                           'paymentMode', 'notes', 'updatedAt'
                          ]);
         allow delete: if isOwner(userId) && isValidId(invoiceId);
       }

@@ -38,6 +38,7 @@
         "gstRate": { "type": "number", "description": "GST tax percentage slab" },
         "taxInclusive": { "type": "boolean", "description": "Whether sellingRate already includes GST" },
         "stockQty": { "type": "number", "description": "Available quantity in stock" },
+        "lowStockThreshold": { "type": "number", "description": "Threshold quantity at or below which low-stock alert shows" },
         "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp on creation" },
         "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp on update" }
       },

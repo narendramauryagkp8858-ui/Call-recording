@@ -66,6 +66,7 @@ function validProductPayload(created) {
     gstRate: 5.0,
     taxInclusive: false,
     stockQty: 40.0,
+    lowStockThreshold: 5.0,
     createdAt: created,
     updatedAt: created,
   };
@@ -193,7 +194,25 @@ test("Owner can manage products with Khareed and Bikri rates; invalid bounds rej
   await assertSucceeds(
     prodRef.update({
       sellingRate: 2200.0,
+      stockQty: 38.0,
+      lowStockThreshold: 6.0,
       updatedAt: new Date(Date.now() - 500),
+    })
+  );
+
+  // Stock adjustment update only (used on bill save / product return)
+  await assertSucceeds(
+    prodRef.update({
+      stockQty: 39.0,
+      updatedAt: new Date(Date.now() - 400),
+    })
+  );
+
+  // Negative stockQty rejected
+  await assertFails(
+    prodRef.update({
+      stockQty: -1.0,
+      updatedAt: new Date(Date.now() - 300),
     })
   );
 
@@ -213,7 +232,7 @@ test("Owner can manage products with Khareed and Bikri rates; invalid bounds rej
   );
 });
 
-test("Owner can manage customers and invoices; cross-user & invalid paymentMode rejected", async () => {
+test("Owner can manage customers, invoices, and product returns; cross-user & immutable tampering rejected", async () => {
   const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
   const bobDb = testEnv.authenticatedContext(BOB_UID).firestore();
   const created = new Date(Date.now() - 5000);
@@ -238,11 +257,54 @@ test("Owner can manage customers and invoices; cross-user & invalid paymentMode 
     })
   );
 
-  // Disallow tampering with grandTotal on existing invoice
+  // Partial product return / edit bill update (quantity 2 -> 1)
+  await assertSucceeds(
+    invRef.update({
+      items: [
+        {
+          productId: "prod_1",
+          name: "Basmati Rice 25kg",
+          hsnCode: "1006",
+          unit: "BAG",
+          quantity: 1.0,
+          sellingRate: 2150.0,
+          gstRate: 5.0,
+          taxInclusive: false,
+          taxableAmount: 2150.0,
+          gstAmount: 107.5,
+          lineTotal: 2257.5,
+        },
+      ],
+      subtotalTaxable: 2150.0,
+      cgstAmount: 53.75,
+      sgstAmount: 53.75,
+      igstAmount: 0.0,
+      totalGstAmount: 107.5,
+      grandTotal: 2257.5,
+      estimatedProfit: 300.0,
+      notes: "1 bag returned",
+      updatedAt: new Date(Date.now() - 400),
+    })
+  );
+
+  // Disallow changing immutable invoiceNumber or setting empty items / negative total
   await assertFails(
     invRef.update({
-      grandTotal: 1.0,
-      updatedAt: new Date(Date.now() - 500),
+      invoiceNumber: "HACK-999",
+      updatedAt: new Date(Date.now() - 300),
+    })
+  );
+  await assertFails(
+    invRef.update({
+      items: [],
+      grandTotal: 0.0,
+      updatedAt: new Date(Date.now() - 300),
+    })
+  );
+  await assertFails(
+    invRef.update({
+      grandTotal: -10.0,
+      updatedAt: new Date(Date.now() - 300),
     })
   );
 

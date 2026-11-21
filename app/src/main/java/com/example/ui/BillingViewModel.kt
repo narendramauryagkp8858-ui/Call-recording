@@ -6,12 +6,14 @@ import androidx.lifecycle.viewModelScope
 import com.example.billing.ComputedLine
 import com.example.billing.GstCalculator
 import com.example.billing.InvoiceTotals
+import com.example.billing.StockStatus
 import com.example.data.BillingRepository
 import com.example.data.Customer
 import com.example.data.Invoice
 import com.example.data.PaymentMode
 import com.example.data.ProductItem
 import com.example.data.ShopProfile
+import com.example.data.StockChangeNotice
 import com.google.firebase.firestore.FirebaseFirestoreException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
@@ -365,7 +367,8 @@ class BillingViewModel(
             } else null
 
             val result = repository.createInvoice(invoice, activeShop, newCustomer)
-            result.onSuccess { saved ->
+            result.onSuccess { createResult ->
+                val saved = createResult.invoice
                 _lastCreatedInvoice.value = saved
                 _draftBill.update {
                     DraftBillState(
@@ -376,7 +379,25 @@ class BillingViewModel(
                         isSaving = false
                     )
                 }
-                _statusMessage.value = "GST Bill ${saved.invoiceNumber} saved!"
+                val lowOrOutAlerts = createResult.stockChanges.filter {
+                    it.status == StockStatus.LOW_STOCK || it.status == StockStatus.OUT_OF_STOCK
+                }
+                val stockSummary = when {
+                    lowOrOutAlerts.isNotEmpty() -> {
+                        val preview = lowOrOutAlerts.take(2).joinToString(", ") {
+                            val tag = if (it.status == StockStatus.OUT_OF_STOCK) "Out" else "${GstCalculator.formatPlainNumber(it.newStock)} left"
+                            "${it.productName} ($tag)"
+                        }
+                        " • Low Stock Alert: $preview"
+                    }
+                    createResult.stockChanges.isNotEmpty() -> {
+                        val first = createResult.stockChanges.first()
+                        val more = if (createResult.stockChanges.size > 1) " +${createResult.stockChanges.size - 1}" else ""
+                        " • Stock left: ${first.productName} ${GstCalculator.formatPlainNumber(first.newStock)} ${first.unit}$more"
+                    }
+                    else -> ""
+                }
+                _statusMessage.value = "GST Bill ${saved.invoiceNumber} saved$stockSummary"
             }.onFailure { err ->
                 _draftBill.update { it.copy(isSaving = false) }
                 _statusMessage.value = err.localizedMessage ?: "Failed to save invoice."
@@ -427,6 +448,22 @@ class BillingViewModel(
         }
     }
 
+    fun adjustProductStock(product: ProductItem, delta: Double) {
+        if (product.id.isBlank()) return
+        viewModelScope.launch {
+            repository.adjustProductStock(product.id, delta)
+                .onSuccess { newStock ->
+                    val statusTag = when (com.example.billing.StockManager.getStockStatus(newStock, product.lowStockThreshold)) {
+                        StockStatus.OUT_OF_STOCK -> " (Out of Stock)"
+                        StockStatus.LOW_STOCK -> " (Low Stock)"
+                        StockStatus.IN_STOCK -> ""
+                    }
+                    _statusMessage.value = "${product.name} stock: ${GstCalculator.formatPlainNumber(newStock)} ${product.unit}$statusTag"
+                }
+                .onFailure { _statusMessage.value = it.localizedMessage ?: "Failed to update stock" }
+        }
+    }
+
     fun deleteProduct(productId: String) {
         viewModelScope.launch {
             repository.deleteProduct(productId)
@@ -465,10 +502,45 @@ class BillingViewModel(
         }
     }
 
-    fun deleteInvoice(invoiceId: String) {
+    fun updateInvoiceWithReturn(updatedInvoice: Invoice) {
         viewModelScope.launch {
-            repository.deleteInvoice(invoiceId)
-                .onSuccess { _statusMessage.value = "Bill deleted" }
+            repository.updateInvoiceWithStockSync(updatedInvoice)
+                .onSuccess { updateResult ->
+                    val restored = updateResult.stockChanges.filter { it.delta > 0.0 }
+                    val deducted = updateResult.stockChanges.filter { it.delta < 0.0 }
+                    val msg = buildString {
+                        append("Bill ${updateResult.invoice.invoiceNumber} updated")
+                        if (restored.isNotEmpty()) {
+                            val summary = restored.take(2).joinToString(", ") {
+                                "${it.productName} +${GstCalculator.formatPlainNumber(it.delta)} (Now ${GstCalculator.formatPlainNumber(it.newStock)})"
+                            }
+                            append(" • Stock restored: $summary")
+                        } else if (deducted.isNotEmpty()) {
+                            val summary = deducted.take(2).joinToString(", ") {
+                                "${it.productName} ${GstCalculator.formatPlainNumber(it.delta)} (Left ${GstCalculator.formatPlainNumber(it.newStock)})"
+                            }
+                            append(" • Stock updated: $summary")
+                        }
+                    }
+                    _statusMessage.value = msg
+                }
+                .onFailure { _statusMessage.value = it.localizedMessage ?: "Failed to update bill" }
+        }
+    }
+
+    fun deleteInvoice(invoiceId: String, restoreStock: Boolean = true) {
+        viewModelScope.launch {
+            repository.deleteInvoice(invoiceId, restoreStock)
+                .onSuccess { restoredList ->
+                    _statusMessage.value = if (restoreStock && restoredList.isNotEmpty()) {
+                        val summary = restoredList.take(2).joinToString(", ") {
+                            "${it.productName} +${GstCalculator.formatPlainNumber(it.delta)} (Now ${GstCalculator.formatPlainNumber(it.newStock)})"
+                        }
+                        "Bill cancelled & stock restored: $summary"
+                    } else {
+                        "Bill deleted"
+                    }
+                }
                 .onFailure { _statusMessage.value = it.localizedMessage ?: "Failed to delete bill" }
         }
     }

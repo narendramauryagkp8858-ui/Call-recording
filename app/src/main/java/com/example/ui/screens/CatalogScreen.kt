@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -23,7 +24,9 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Inventory2
 import androidx.compose.material.icons.filled.People
 import androidx.compose.material.icons.filled.Receipt
+import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -42,6 +45,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -55,6 +59,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.example.billing.GstCalculator
+import com.example.billing.StockManager
+import com.example.billing.StockStatus
 import com.example.data.Customer
 import com.example.data.ProductItem
 import com.example.ui.BillingViewModel
@@ -72,6 +78,7 @@ fun CatalogScreen(
 ) {
     var selectedSegment by remember { mutableIntStateOf(0) } // 0 = Products, 1 = Customers
     var searchQuery by remember { mutableStateOf("") }
+    var showLowStockOnly by remember { mutableStateOf(false) }
     var editingProduct by remember { mutableStateOf<ProductItem?>(null) }
     var showAddProduct by remember { mutableStateOf(false) }
     var editingCustomer by remember { mutableStateOf<Customer?>(null) }
@@ -84,8 +91,8 @@ fun CatalogScreen(
     ) {
         item {
             SectionHeader(
-                title = "Items & Customers",
-                subtitle = "Khareed rate stays private; only Bikri rate goes on bills",
+                title = "Items, Stock & Customers",
+                subtitle = "Live store stock sync + private Khareed / public Bikri rates",
                 action = {
                     Button(
                         onClick = {
@@ -112,7 +119,7 @@ fun CatalogScreen(
                     icon = { Icon(Icons.Default.Inventory2, contentDescription = null, modifier = Modifier.size(18.dp)) },
                     modifier = Modifier.testTag("segment_products")
                 ) {
-                    Text("Items (Khareed/Bikri)")
+                    Text("Stock & Items")
                 }
                 SegmentedButton(
                     selected = selectedSegment == 1,
@@ -144,21 +151,137 @@ fun CatalogScreen(
                 is UiState.Loading -> item { CircularProgressIndicator(Modifier.padding(16.dp)) }
                 is UiState.Error -> item { Text(productsState.message, color = MaterialTheme.colorScheme.error) }
                 is UiState.Success -> {
-                    val filtered = productsState.data.filter {
-                        searchQuery.isBlank() || it.name.contains(searchQuery, true) || it.hsnCode.contains(searchQuery, true)
+                    val allProducts = productsState.data
+                    val lowOrOutProducts = allProducts.filter { StockManager.isLowOrOutOfStock(it) }
+                    val outOfStockCount = allProducts.count {
+                        StockManager.getStockStatus(it.stockQty, it.lowStockThreshold) == StockStatus.OUT_OF_STOCK
                     }
+
+                    if (allProducts.isNotEmpty()) {
+                        if (lowOrOutProducts.isNotEmpty()) {
+                            item {
+                                Surface(
+                                    color = if (outOfStockCount > 0) {
+                                        MaterialTheme.colorScheme.errorContainer
+                                    } else {
+                                        MaterialTheme.colorScheme.secondaryContainer
+                                    },
+                                    shape = MaterialTheme.shapes.medium,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("low_stock_alert_banner")
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(12.dp),
+                                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(
+                                            Icons.Default.WarningAmber,
+                                            contentDescription = "Low stock alert",
+                                            tint = if (outOfStockCount > 0) {
+                                                MaterialTheme.colorScheme.onErrorContainer
+                                            } else {
+                                                MaterialTheme.colorScheme.onSecondaryContainer
+                                            }
+                                        )
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                text = "Stock Alert (${lowOrOutProducts.size} ${if (lowOrOutProducts.size == 1) "item" else "items"})",
+                                                style = MaterialTheme.typography.titleSmall,
+                                                fontWeight = FontWeight.Bold,
+                                                color = if (outOfStockCount > 0) {
+                                                    MaterialTheme.colorScheme.onErrorContainer
+                                                } else {
+                                                    MaterialTheme.colorScheme.onSecondaryContainer
+                                                }
+                                            )
+                                            val previewNames = lowOrOutProducts.take(3).joinToString(", ") { prod ->
+                                                val qtyStr = GstCalculator.formatPlainNumber(prod.stockQty)
+                                                "${prod.name}: $qtyStr ${prod.unit}"
+                                            }
+                                            val extra = if (lowOrOutProducts.size > 3) " +${lowOrOutProducts.size - 3} more" else ""
+                                            Text(
+                                                text = previewNames + extra,
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = if (outOfStockCount > 0) {
+                                                    MaterialTheme.colorScheme.onErrorContainer
+                                                } else {
+                                                    MaterialTheme.colorScheme.onSecondaryContainer
+                                                }
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        item {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                FilterChip(
+                                    selected = !showLowStockOnly,
+                                    onClick = { showLowStockOnly = false },
+                                    label = { Text("All Items (${allProducts.size})") },
+                                    modifier = Modifier.testTag("filter_all_stock")
+                                )
+                                FilterChip(
+                                    selected = showLowStockOnly,
+                                    onClick = { showLowStockOnly = true },
+                                    label = { Text("Low / Out (${lowOrOutProducts.size})") },
+                                    modifier = Modifier.testTag("filter_low_stock")
+                                )
+                            }
+                        }
+                    }
+
+                    val filtered = allProducts.filter { prod ->
+                        val matchesQuery = searchQuery.isBlank() ||
+                            prod.name.contains(searchQuery, true) ||
+                            prod.hsnCode.contains(searchQuery, true)
+                        val matchesStock = !showLowStockOnly || StockManager.isLowOrOutOfStock(prod)
+                        matchesQuery && matchesStock
+                    }
+
                     if (filtered.isEmpty()) {
                         item {
                             EmptyStateCard(
-                                title = "No Items Yet",
-                                description = "Add items with both Khareed (Purchase) & Bikri (Selling) rates. Only Bikri rate appears on customer bills.",
-                                actionLabel = "Add First Item",
-                                onAction = { showAddProduct = true }
+                                title = if (showLowStockOnly && allProducts.isNotEmpty()) "All Stock Healthy" else "No Items Yet",
+                                description = if (showLowStockOnly && allProducts.isNotEmpty()) {
+                                    "Every item in your store is currently above its low-stock alert level."
+                                } else {
+                                    "Add items with opening Stock Qty, Khareed (Purchase) & Bikri (Selling) rates. Stock automatically updates when bills are created or returned."
+                                },
+                                actionLabel = if (showLowStockOnly && allProducts.isNotEmpty()) "Show All Items" else "Add First Item",
+                                onAction = {
+                                    if (showLowStockOnly && allProducts.isNotEmpty()) showLowStockOnly = false
+                                    else showAddProduct = true
+                                }
                             )
                         }
                     } else {
                         items(filtered, key = { it.id }) { prod ->
                             val margin = GstCalculator.round2(prod.sellingRate - prod.purchaseRate)
+                            val stockStatus = StockManager.getStockStatus(prod.stockQty, prod.lowStockThreshold)
+                            val stockBg = when (stockStatus) {
+                                StockStatus.OUT_OF_STOCK -> MaterialTheme.colorScheme.errorContainer
+                                StockStatus.LOW_STOCK -> MaterialTheme.colorScheme.secondaryContainer
+                                StockStatus.IN_STOCK -> MaterialTheme.colorScheme.tertiaryContainer
+                            }
+                            val stockFg = when (stockStatus) {
+                                StockStatus.OUT_OF_STOCK -> MaterialTheme.colorScheme.onErrorContainer
+                                StockStatus.LOW_STOCK -> MaterialTheme.colorScheme.onSecondaryContainer
+                                StockStatus.IN_STOCK -> MaterialTheme.colorScheme.onTertiaryContainer
+                            }
+                            val stockLabel = when (stockStatus) {
+                                StockStatus.OUT_OF_STOCK -> "Out of Stock: 0 ${prod.unit}"
+                                StockStatus.LOW_STOCK -> "Low Stock: ${GstCalculator.formatPlainNumber(prod.stockQty)} ${prod.unit}"
+                                StockStatus.IN_STOCK -> "In Stock: ${GstCalculator.formatPlainNumber(prod.stockQty)} ${prod.unit}"
+                            }
+
                             Card(
                                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
                                 elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
@@ -184,14 +307,73 @@ fun CatalogScreen(
                                             )
                                         }
                                         Row {
-                                            IconButton(onClick = { editingProduct = prod }, modifier = Modifier.size(44.dp)) {
+                                            IconButton(onClick = { editingProduct = prod }, modifier = Modifier.minimumInteractiveComponentSize()) {
                                                 Icon(Icons.Default.Edit, contentDescription = "Edit product")
                                             }
-                                            IconButton(onClick = { viewModel.deleteProduct(prod.id) }, modifier = Modifier.size(44.dp)) {
+                                            IconButton(onClick = { viewModel.deleteProduct(prod.id) }, modifier = Modifier.minimumInteractiveComponentSize()) {
                                                 Icon(Icons.Default.DeleteOutline, contentDescription = "Delete product", tint = MaterialTheme.colorScheme.error)
                                             }
                                         }
                                     }
+
+                                    // Live Stock Status & Quick Adjust Row
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Surface(
+                                            color = stockBg,
+                                            shape = RoundedCornerShape(8.dp),
+                                            modifier = Modifier.testTag("stock_badge_${prod.id}")
+                                        ) {
+                                            Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) {
+                                                Text(
+                                                    text = stockLabel,
+                                                    style = MaterialTheme.typography.labelLarge,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = stockFg
+                                                )
+                                                Text(
+                                                    text = "Alert at ≤ ${GstCalculator.formatPlainNumber(prod.lowStockThreshold)} ${prod.unit}",
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = stockFg.copy(alpha = 0.85f)
+                                                )
+                                            }
+                                        }
+
+                                        Surface(
+                                            shape = RoundedCornerShape(10.dp),
+                                            color = MaterialTheme.colorScheme.surfaceContainerLow
+                                        ) {
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                IconButton(
+                                                    onClick = { viewModel.adjustProductStock(prod, -1.0) },
+                                                    enabled = prod.stockQty > 0.0,
+                                                    modifier = Modifier
+                                                        .minimumInteractiveComponentSize()
+                                                        .testTag("stock_minus_${prod.id}")
+                                                ) {
+                                                    Icon(Icons.Default.Remove, contentDescription = "Decrease stock by 1", modifier = Modifier.size(18.dp))
+                                                }
+                                                Text(
+                                                    text = GstCalculator.formatPlainNumber(prod.stockQty),
+                                                    style = MaterialTheme.typography.titleSmall,
+                                                    fontWeight = FontWeight.Bold,
+                                                    modifier = Modifier.padding(horizontal = 4.dp)
+                                                )
+                                                IconButton(
+                                                    onClick = { viewModel.adjustProductStock(prod, 1.0) },
+                                                    modifier = Modifier
+                                                        .minimumInteractiveComponentSize()
+                                                        .testTag("stock_plus_${prod.id}")
+                                                ) {
+                                                    Icon(Icons.Default.Add, contentDescription = "Increase stock by 1", modifier = Modifier.size(18.dp))
+                                                }
+                                            }
+                                        }
+                                    }
+
                                     Row(
                                         modifier = Modifier.fillMaxWidth(),
                                         horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -365,13 +547,16 @@ private fun ProductEditorDialog(
     var hsn by remember { mutableStateOf(initial?.hsnCode ?: "") }
     var unit by remember { mutableStateOf(initial?.unit ?: "PCS") }
     var stockQty by remember { mutableStateOf(initial?.let { GstCalculator.formatPlainNumber(it.stockQty) } ?: "0") }
+    var lowStockThreshold by remember {
+        mutableStateOf(initial?.let { GstCalculator.formatPlainNumber(it.lowStockThreshold) } ?: "5")
+    }
     var taxInclusive by remember { mutableStateOf(initial?.taxInclusive ?: false) }
 
     val slabs = listOf("0", "5", "12", "18", "28")
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(if (initial == null) "Add Item (Khareed & Bikri)" else "Edit Item") },
+        title = { Text(if (initial == null) "Add Item (Stock, Khareed & Bikri)" else "Edit Item & Stock") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(
@@ -446,23 +631,35 @@ private fun ProductEditorDialog(
                         modifier = Modifier.weight(1f)
                     )
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedTextField(
                         value = stockQty,
                         onValueChange = { stockQty = it },
                         label = { Text("Stock Qty") },
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                         singleLine = true,
-                        modifier = Modifier.weight(1f)
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("product_stock_input")
                     )
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.weight(1.3f),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text("GST Inclusive", style = MaterialTheme.typography.bodySmall)
-                        Switch(checked = taxInclusive, onCheckedChange = { taxInclusive = it })
-                    }
+                    OutlinedTextField(
+                        value = lowStockThreshold,
+                        onValueChange = { lowStockThreshold = it },
+                        label = { Text("Low Alert At") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        singleLine = true,
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("product_threshold_input")
+                    )
+                }
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text("Selling Rate includes GST", style = MaterialTheme.typography.bodySmall)
+                    Switch(checked = taxInclusive, onCheckedChange = { taxInclusive = it })
                 }
             }
         },
@@ -473,6 +670,7 @@ private fun ProductEditorDialog(
                     val sell = sellingRate.toDoubleOrNull() ?: 0.0
                     val gst = gstRate.toDoubleOrNull() ?: 0.0
                     val stock = stockQty.toDoubleOrNull() ?: 0.0
+                    val threshold = lowStockThreshold.toDoubleOrNull() ?: 5.0
                     onSave(
                         (initial ?: ProductItem()).copy(
                             name = name.trim(),
@@ -482,6 +680,7 @@ private fun ProductEditorDialog(
                             hsnCode = hsn.trim().uppercase(),
                             unit = unit.trim().ifBlank { "PCS" }.uppercase(),
                             stockQty = stock.coerceAtLeast(0.0),
+                            lowStockThreshold = threshold.coerceAtLeast(0.0),
                             taxInclusive = taxInclusive
                         )
                     )

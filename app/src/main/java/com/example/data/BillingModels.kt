@@ -69,6 +69,7 @@ data class ProductItem(
     val gstRate: Double = 18.0,
     val taxInclusive: Boolean = false,
     val stockQty: Double = 0.0,
+    val lowStockThreshold: Double = 5.0,
     @ServerTimestamp val createdAt: Timestamp? = null,
     @ServerTimestamp val updatedAt: Timestamp? = null
 ) {
@@ -81,6 +82,7 @@ data class ProductItem(
         "gstRate" to gstRate.coerceIn(0.0, 100.0),
         "taxInclusive" to taxInclusive,
         "stockQty" to stockQty.coerceIn(0.0, 10_000_000.0),
+        "lowStockThreshold" to lowStockThreshold.coerceIn(0.0, 10_000_000.0),
         "createdAt" to FieldValue.serverTimestamp(),
         "updatedAt" to FieldValue.serverTimestamp()
     )
@@ -94,6 +96,7 @@ data class ProductItem(
         "gstRate" to gstRate.coerceIn(0.0, 100.0),
         "taxInclusive" to taxInclusive,
         "stockQty" to stockQty.coerceIn(0.0, 10_000_000.0),
+        "lowStockThreshold" to lowStockThreshold.coerceIn(0.0, 10_000_000.0),
         "updatedAt" to FieldValue.serverTimestamp()
     )
 }
@@ -235,6 +238,28 @@ data class Invoice(
         "notes" to notes.trim().take(300),
         "issuedAtMillis" to issuedAtMillis.coerceAtLeast(1L),
         "createdAt" to FieldValue.serverTimestamp(),
+        "updatedAt" to FieldValue.serverTimestamp()
+    )
+
+    fun toEditUpdateMap(): Map<String, Any> = mapOf(
+        "customerId" to customerId.take(128),
+        "customerName" to customerName.trim().take(120),
+        "customerPhone" to customerPhone.trim().take(20),
+        "customerAddress" to customerAddress.trim().take(300),
+        "customerGstin" to customerGstin.trim().uppercase().take(20),
+        "interState" to interState,
+        "includeStamp" to includeStamp,
+        "includeSignature" to includeSignature,
+        "items" to items.take(50).map { it.toMap() },
+        "subtotalTaxable" to subtotalTaxable.coerceAtLeast(0.0),
+        "cgstAmount" to cgstAmount.coerceAtLeast(0.0),
+        "sgstAmount" to sgstAmount.coerceAtLeast(0.0),
+        "igstAmount" to igstAmount.coerceAtLeast(0.0),
+        "totalGstAmount" to totalGstAmount.coerceAtLeast(0.0),
+        "grandTotal" to grandTotal.coerceAtLeast(0.0),
+        "estimatedProfit" to estimatedProfit.coerceIn(-1_000_000_000.0, 1_000_000_000.0),
+        "paymentMode" to PaymentMode.fromRaw(paymentMode).name,
+        "notes" to notes.trim().take(300),
         "updatedAt" to FieldValue.serverTimestamp()
     )
 }

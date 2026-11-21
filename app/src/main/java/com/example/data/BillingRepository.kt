@@ -2,6 +2,8 @@ package com.example.data
 
 import android.content.Context
 import com.example.R
+import com.example.billing.StockManager
+import com.example.billing.StockStatus
 import com.google.firebase.Firebase
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.auth
@@ -18,6 +20,26 @@ import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.tasks.await
+
+data class StockChangeNotice(
+    val productId: String,
+    val productName: String,
+    val unit: String,
+    val previousStock: Double,
+    val newStock: Double,
+    val delta: Double,
+    val status: StockStatus
+)
+
+data class InvoiceCreateResult(
+    val invoice: Invoice,
+    val stockChanges: List<StockChangeNotice> = emptyList()
+)
+
+data class InvoiceUpdateResult(
+    val invoice: Invoice,
+    val stockChanges: List<StockChangeNotice> = emptyList()
+)
 
 class BillingRepository(
     private val db: FirebaseFirestore,
@@ -180,6 +202,37 @@ class BillingRepository(
         }
     }
 
+    suspend fun adjustProductStock(productId: String, delta: Double): Result<Double> {
+        var docPath = "users/${auth.currentUser?.uid ?: "unauth"}/products/$productId"
+        return try {
+            val uid = requireUserId()
+            require(productId.isNotBlank()) { "Invalid product ID." }
+            val docRef = userRoot(uid).collection("products").document(productId)
+            docPath = docRef.path
+
+            val newStock = db.runTransaction { transaction ->
+                val snap = transaction.get(docRef)
+                if (!snap.exists()) throw IllegalStateException("Item no longer exists.")
+                val currentStock = (snap.get("stockQty") as? Number)?.toDouble() ?: 0.0
+                val updatedStock = StockManager.computeUpdatedStockQty(currentStock, delta)
+                transaction.update(
+                    docRef,
+                    mapOf(
+                        "stockQty" to updatedStock,
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                )
+                updatedStock
+            }.await()
+            Result.success(newStock)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, docPath)
+            Result.failure(e)
+        }
+    }
+
     suspend fun saveCustomer(customer: Customer): Result<String> {
         var docPath = "users/${auth.currentUser?.uid ?: "unauth"}/customers"
         return try {
@@ -224,7 +277,7 @@ class BillingRepository(
         invoice: Invoice,
         shop: ShopProfile,
         newCustomerIfRequested: Customer? = null
-    ): Result<Invoice> {
+    ): Result<InvoiceCreateResult> {
         var docPath = "users/${auth.currentUser?.uid ?: "unauth"}/invoices"
         return try {
             val uid = requireUserId()
@@ -236,34 +289,79 @@ class BillingRepository(
             val root = userRoot(uid)
             val invoiceRef = root.collection("invoices").document()
             docPath = invoiceRef.path
-            val batch = db.batch()
+
+            val stockDeltas = StockManager.computeStockDeltasForCreate(invoice.items)
+            val productRefs = stockDeltas.keys.associateWith { pid ->
+                root.collection("products").document(pid)
+            }
 
             var finalCustomerId = invoice.customerId
-            if (newCustomerIfRequested != null && finalCustomerId.isBlank()) {
-                val custRef = root.collection("customers").document()
-                finalCustomerId = custRef.id
-                batch.set(custRef, newCustomerIfRequested.toCreateMap())
-            }
+            val custRef = if (newCustomerIfRequested != null && finalCustomerId.isBlank()) {
+                root.collection("customers").document().also { finalCustomerId = it.id }
+            } else null
 
             val savedInvoice = invoice.copy(
                 id = invoiceRef.id,
                 customerId = finalCustomerId
             )
-            batch.set(invoiceRef, savedInvoice.toCreateMap())
 
-            if (shop.id.isNotBlank()) {
-                val shopRef = root.collection("shops").document(shop.id)
-                batch.update(
-                    shopRef,
-                    mapOf(
-                        "nextInvoiceNumber" to (shop.nextInvoiceNumber + 1L).coerceAtMost(10_000_000L),
-                        "updatedAt" to FieldValue.serverTimestamp()
+            val stockNotices = db.runTransaction { transaction ->
+                // Phase 1: All Firestore reads BEFORE any writes
+                val productSnapshots = productRefs.mapValues { (_, ref) ->
+                    transaction.get(ref)
+                }
+
+                // Phase 2: All Firestore writes
+                if (custRef != null && newCustomerIfRequested != null) {
+                    transaction.set(custRef, newCustomerIfRequested.toCreateMap())
+                }
+                transaction.set(invoiceRef, savedInvoice.toCreateMap())
+
+                if (shop.id.isNotBlank()) {
+                    val shopRef = root.collection("shops").document(shop.id)
+                    transaction.update(
+                        shopRef,
+                        mapOf(
+                            "nextInvoiceNumber" to (shop.nextInvoiceNumber + 1L).coerceAtMost(10_000_000L),
+                            "updatedAt" to FieldValue.serverTimestamp()
+                        )
                     )
-                )
-            }
+                }
 
-            batch.commit().await()
-            Result.success(savedInvoice)
+                val notices = mutableListOf<StockChangeNotice>()
+                productSnapshots.forEach { (pid, snap) ->
+                    if (snap.exists()) {
+                        val delta = stockDeltas[pid] ?: 0.0
+                        val currentStock = (snap.get("stockQty") as? Number)?.toDouble() ?: 0.0
+                        val threshold = (snap.get("lowStockThreshold") as? Number)?.toDouble()
+                            ?: StockManager.DEFAULT_LOW_STOCK_THRESHOLD
+                        val nextStock = StockManager.computeUpdatedStockQty(currentStock, delta)
+                        val name = snap.getString("name") ?: "Item"
+                        val unit = snap.getString("unit") ?: "PCS"
+                        transaction.update(
+                            snap.reference,
+                            mapOf(
+                                "stockQty" to nextStock,
+                                "updatedAt" to FieldValue.serverTimestamp()
+                            )
+                        )
+                        notices.add(
+                            StockChangeNotice(
+                                productId = pid,
+                                productName = name,
+                                unit = unit,
+                                previousStock = currentStock,
+                                newStock = nextStock,
+                                delta = delta,
+                                status = StockManager.getStockStatus(nextStock, threshold)
+                            )
+                        )
+                    }
+                }
+                notices
+            }.await()
+
+            Result.success(InvoiceCreateResult(savedInvoice, stockNotices))
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -303,15 +401,145 @@ class BillingRepository(
         }
     }
 
-    suspend fun deleteInvoice(invoiceId: String): Result<Unit> {
+    suspend fun updateInvoiceWithStockSync(updatedInvoice: Invoice): Result<InvoiceUpdateResult> {
+        var docPath = "users/${auth.currentUser?.uid ?: "unauth"}/invoices/${updatedInvoice.id}"
+        return try {
+            val uid = requireUserId()
+            require(updatedInvoice.id.isNotBlank()) { "Invalid invoice ID." }
+            require(updatedInvoice.items.isNotEmpty() && updatedInvoice.items.size <= 50) {
+                "Invoice must contain between 1 and 50 items."
+            }
+            require(updatedInvoice.customerName.trim().isNotEmpty()) { "Customer name is required." }
+
+            val root = userRoot(uid)
+            val invoiceRef = root.collection("invoices").document(updatedInvoice.id)
+            docPath = invoiceRef.path
+
+            val notices = db.runTransaction { transaction ->
+                // Phase 1: Read existing invoice first, then all affected product documents
+                val invSnap = transaction.get(invoiceRef)
+                if (!invSnap.exists()) {
+                    throw IllegalStateException("Bill no longer exists.")
+                }
+                val existingInvoice = invSnap.toObject(
+                    Invoice::class.java,
+                    DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
+                )
+                val stockDeltas = StockManager.computeStockDeltasForUpdate(
+                    oldItems = existingInvoice?.items.orEmpty(),
+                    newItems = updatedInvoice.items
+                )
+                val productSnapshots = stockDeltas.keys.associateWith { pid ->
+                    transaction.get(root.collection("products").document(pid))
+                }
+
+                // Phase 2: All writes after reads
+                transaction.update(invoiceRef, updatedInvoice.toEditUpdateMap())
+
+                val changes = mutableListOf<StockChangeNotice>()
+                productSnapshots.forEach { (pid, snap) ->
+                    if (snap.exists()) {
+                        val delta = stockDeltas[pid] ?: 0.0
+                        val currentStock = (snap.get("stockQty") as? Number)?.toDouble() ?: 0.0
+                        val threshold = (snap.get("lowStockThreshold") as? Number)?.toDouble()
+                            ?: StockManager.DEFAULT_LOW_STOCK_THRESHOLD
+                        val nextStock = StockManager.computeUpdatedStockQty(currentStock, delta)
+                        val name = snap.getString("name") ?: "Item"
+                        val unit = snap.getString("unit") ?: "PCS"
+                        transaction.update(
+                            snap.reference,
+                            mapOf(
+                                "stockQty" to nextStock,
+                                "updatedAt" to FieldValue.serverTimestamp()
+                            )
+                        )
+                        changes.add(
+                            StockChangeNotice(
+                                productId = pid,
+                                productName = name,
+                                unit = unit,
+                                previousStock = currentStock,
+                                newStock = nextStock,
+                                delta = delta,
+                                status = StockManager.getStockStatus(nextStock, threshold)
+                            )
+                        )
+                    }
+                }
+                changes
+            }.await()
+
+            Result.success(InvoiceUpdateResult(updatedInvoice, notices))
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, docPath)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun deleteInvoice(invoiceId: String, restoreStock: Boolean = true): Result<List<StockChangeNotice>> {
         var docPath = "users/${auth.currentUser?.uid ?: "unauth"}/invoices/$invoiceId"
         return try {
             val uid = requireUserId()
             require(invoiceId.isNotBlank()) { "Invalid invoice ID." }
-            val docRef = userRoot(uid).collection("invoices").document(invoiceId)
-            docPath = docRef.path
-            docRef.delete().await()
-            Result.success(Unit)
+            val root = userRoot(uid)
+            val invoiceRef = root.collection("invoices").document(invoiceId)
+            docPath = invoiceRef.path
+
+            val notices = db.runTransaction { transaction ->
+                val invSnap = transaction.get(invoiceRef)
+                if (!invSnap.exists()) {
+                    throw IllegalStateException("Bill no longer exists.")
+                }
+                val existingInvoice = invSnap.toObject(
+                    Invoice::class.java,
+                    DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
+                )
+                val restoreQtys = if (restoreStock) {
+                    StockManager.aggregateProductQuantities(existingInvoice?.items.orEmpty())
+                } else {
+                    emptyMap()
+                }
+                val productSnapshots = restoreQtys.keys.associateWith { pid ->
+                    transaction.get(root.collection("products").document(pid))
+                }
+
+                val changes = mutableListOf<StockChangeNotice>()
+                productSnapshots.forEach { (pid, snap) ->
+                    if (snap.exists()) {
+                        val addBackQty = restoreQtys[pid] ?: 0.0
+                        val currentStock = (snap.get("stockQty") as? Number)?.toDouble() ?: 0.0
+                        val threshold = (snap.get("lowStockThreshold") as? Number)?.toDouble()
+                            ?: StockManager.DEFAULT_LOW_STOCK_THRESHOLD
+                        val nextStock = StockManager.computeUpdatedStockQty(currentStock, addBackQty)
+                        val name = snap.getString("name") ?: "Item"
+                        val unit = snap.getString("unit") ?: "PCS"
+                        transaction.update(
+                            snap.reference,
+                            mapOf(
+                                "stockQty" to nextStock,
+                                "updatedAt" to FieldValue.serverTimestamp()
+                            )
+                        )
+                        changes.add(
+                            StockChangeNotice(
+                                productId = pid,
+                                productName = name,
+                                unit = unit,
+                                previousStock = currentStock,
+                                newStock = nextStock,
+                                delta = addBackQty,
+                                status = StockManager.getStockStatus(nextStock, threshold)
+                            )
+                        )
+                    }
+                }
+                transaction.delete(invoiceRef)
+                changes
+            }.await()
+
+            Result.success(notices)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {

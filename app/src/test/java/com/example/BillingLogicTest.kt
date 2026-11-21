@@ -99,4 +99,44 @@ class BillingLogicTest {
             words
         )
     }
+
+    @Test
+    fun stockManager_deductsOnSaleAndRestoresOnReturn() {
+        val phoneSoldOne = com.example.data.InvoiceLineItem(
+            productId = "phone_1",
+            name = "Phone",
+            unit = "PCS",
+            quantity = 1.0,
+            sellingRate = 10000.0
+        )
+        val createDeltas = com.example.billing.StockManager.computeStockDeltasForCreate(listOf(phoneSoldOne))
+        assertEquals(-1.0, createDeltas["phone_1"] ?: 0.0, 0.001)
+        val afterSaleStock = com.example.billing.StockManager.computeUpdatedStockQty(10.0, createDeltas["phone_1"]!!)
+        assertEquals(9.0, afterSaleStock, 0.001)
+
+        // Return 1 out of 2 units sold
+        val billedTwo = listOf(phoneSoldOne.copy(quantity = 2.0))
+        val updatedOne = listOf(phoneSoldOne.copy(quantity = 1.0))
+        val returnDeltas = com.example.billing.StockManager.computeStockDeltasForUpdate(billedTwo, updatedOne)
+        assertEquals(1.0, returnDeltas["phone_1"] ?: 0.0, 0.001)
+        val restoredStock = com.example.billing.StockManager.computeUpdatedStockQty(8.0, returnDeltas["phone_1"]!!)
+        assertEquals(9.0, restoredStock, 0.001)
+
+        // Never drop below zero when billed above available stock
+        assertEquals(0.0, com.example.billing.StockManager.computeUpdatedStockQty(2.0, -5.0), 0.001)
+
+        // Low stock threshold detection
+        assertEquals(
+            com.example.billing.StockStatus.OUT_OF_STOCK,
+            com.example.billing.StockManager.getStockStatus(0.0, 5.0)
+        )
+        assertEquals(
+            com.example.billing.StockStatus.LOW_STOCK,
+            com.example.billing.StockManager.getStockStatus(4.0, 5.0)
+        )
+        assertEquals(
+            com.example.billing.StockStatus.IN_STOCK,
+            com.example.billing.StockManager.getStockStatus(9.0, 5.0)
+        )
+    }
 }

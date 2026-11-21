@@ -298,6 +298,7 @@ fun BillingAppShell(currentUserId: String) {
                             BillingTab.BILLS -> InvoicesScreen(
                                 viewModel = viewModel,
                                 invoicesState = invoicesState,
+                                productsState = productsState,
                                 onGoToNewBill = { currentTab = BillingTab.NEW_BILL },
                                 onPreviewPdf = ::launchPdfPreview,
                                 onShareWhatsApp = ::launchWhatsAppShare,

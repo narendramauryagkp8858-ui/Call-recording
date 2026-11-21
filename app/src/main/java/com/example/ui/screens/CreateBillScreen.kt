@@ -65,6 +65,8 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.billing.GstCalculator
+import com.example.billing.StockManager
+import com.example.billing.StockStatus
 import com.example.data.Customer
 import com.example.data.Invoice
 import com.example.data.PaymentMode
@@ -96,6 +98,13 @@ fun CreateBillScreen(
     val products = (productsState as? UiState.Success)?.data ?: emptyList()
     val customers = (customersState as? UiState.Success)?.data ?: emptyList()
     val activeShop = viewModel.resolveActiveShop(shops)
+
+    val productsById = remember(products) { products.associateBy { it.id } }
+    val cartQtyByProductId = remember(draft.lines) {
+        draft.lines.filter { it.productId.isNotBlank() }
+            .groupBy { it.productId }
+            .mapValues { (_, list) -> list.sumOf { it.quantity } }
+    }
 
     var showCustomerPicker by remember { mutableStateOf(false) }
     var showProductPicker by remember { mutableStateOf(false) }
@@ -406,6 +415,20 @@ fun CreateBillScreen(
                                         if (line.taxInclusive) append(" (Incl)")
                                     }
                                 )
+                                val stockProd = productsById[line.productId]
+                                if (stockProd != null) {
+                                    val afterBill = GstCalculator.round2((stockProd.stockQty - (cartQtyByProductId[line.productId] ?: line.quantity)).coerceAtLeast(0.0))
+                                    val isShort = (cartQtyByProductId[line.productId] ?: line.quantity) > stockProd.stockQty
+                                    Text(
+                                        text = if (isShort) {
+                                            "Stock in store: ${GstCalculator.formatPlainNumber(stockProd.stockQty)} ${stockProd.unit} (exceeds stock)"
+                                        } else {
+                                            "Store Stock: ${GstCalculator.formatPlainNumber(stockProd.stockQty)} ${stockProd.unit} → After bill: ${GstCalculator.formatPlainNumber(afterBill)}"
+                                        },
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = if (isShort) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+                                    )
+                                }
                             }
                             Row {
                                 IconButton(
@@ -647,6 +670,7 @@ fun CreateBillScreen(
     if (showProductPicker) {
         ProductPickerDialog(
             products = products,
+            inCartQtyByProductId = cartQtyByProductId,
             onDismiss = { showProductPicker = false },
             onAddProduct = {
                 viewModel.addProductToBill(it)
@@ -852,6 +876,7 @@ private fun CustomerPickerDialog(
 @Composable
 private fun ProductPickerDialog(
     products: List<ProductItem>,
+    inCartQtyByProductId: Map<String, Double>,
     onDismiss: () -> Unit,
     onAddProduct: (ProductItem) -> Unit
 ) {
@@ -882,6 +907,13 @@ private fun ProductPickerDialog(
                 } else {
                     LazyColumn(modifier = Modifier.heightIn(max = 320.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         items(filtered, key = { it.id }) { prod ->
+                            val inCart = inCartQtyByProductId[prod.id] ?: 0.0
+                            val status = StockManager.getStockStatus(prod.stockQty, prod.lowStockThreshold)
+                            val stockColor = when (status) {
+                                StockStatus.OUT_OF_STOCK -> MaterialTheme.colorScheme.error
+                                StockStatus.LOW_STOCK -> MaterialTheme.colorScheme.secondary
+                                StockStatus.IN_STOCK -> MaterialTheme.colorScheme.tertiary
+                            }
                             Surface(
                                 onClick = { onAddProduct(prod) },
                                 shape = MaterialTheme.shapes.small,
@@ -899,6 +931,23 @@ private fun ProductPickerDialog(
                                             "Bikri: ${GstCalculator.formatRupees(prod.sellingRate)}/${prod.unit} • GST ${
                                                 GstCalculator.formatPlainNumber(prod.gstRate)
                                             }%"
+                                        )
+                                        Text(
+                                            text = buildString {
+                                                append(
+                                                    when (status) {
+                                                        StockStatus.OUT_OF_STOCK -> "Out of Stock (0 ${prod.unit})"
+                                                        StockStatus.LOW_STOCK -> "Low Stock: ${GstCalculator.formatPlainNumber(prod.stockQty)} ${prod.unit}"
+                                                        StockStatus.IN_STOCK -> "Stock: ${GstCalculator.formatPlainNumber(prod.stockQty)} ${prod.unit}"
+                                                    }
+                                                )
+                                                if (inCart > 0.0) {
+                                                    append(" • In Bill: ${GstCalculator.formatPlainNumber(inCart)}")
+                                                }
+                                            },
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = stockColor
                                         )
                                     }
                                     Icon(Icons.Default.Add, contentDescription = "Add item", tint = MaterialTheme.colorScheme.primary)
