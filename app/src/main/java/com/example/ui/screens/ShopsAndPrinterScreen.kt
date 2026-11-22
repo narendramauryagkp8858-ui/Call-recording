@@ -73,11 +73,16 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.credentials.CredentialManager
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.BuildConfig
 import com.example.billing.ImageStampHelper
 import com.example.billing.PrinterDeviceInfo
 import com.example.billing.ThermalPrinterManager
+import com.example.data.AppDataMigrationManager
+import com.example.data.AppUpdateMeta
 import com.example.data.PrinterConfig
 import com.example.data.ShopProfile
+import com.example.data.getAppSigningSha1
 import com.example.data.signOut
 import com.example.ui.BillingViewModel
 import com.example.ui.UiState
@@ -355,6 +360,41 @@ fun ShopsAndPrinterScreen(
                         Spacer(Modifier.width(6.dp))
                         Text("Sign Out")
                     }
+                }
+            }
+        }
+
+        // App Version, Signing Key & Data-Safe Update Card
+        item {
+            val updateMeta by remember(context) {
+                AppDataMigrationManager.observeMeta(context)
+            }.collectAsStateWithLifecycle(initialValue = AppUpdateMeta())
+            val signingSha1 = remember(context) { getAppSigningSha1(context) }
+
+            Card(
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+                shape = MaterialTheme.shapes.large
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Text("App Version & Update Safety", style = MaterialTheme.typography.titleMedium)
+                    MonoCodeText("Version: v${BuildConfig.VERSION_NAME} (versionCode ${BuildConfig.VERSION_CODE})")
+                    MonoCodeText("Package: ${BuildConfig.APPLICATION_ID}")
+                    MonoCodeText("Signing SHA-1: $signingSha1")
+                    Text(
+                        text = if (updateMeta.upgradeCount > 0) {
+                            "Safely upgraded (${updateMeta.upgradeCount}x, from Build ${updateMeta.previousVersionCode}) — all bills, shops, Mohar & stock preserved."
+                        } else {
+                            "In-place update ready — all bills, customers, shops, Mohar & stock stay preserved across updates."
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.tertiary
+                    )
                 }
             }
         }

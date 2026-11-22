@@ -65,6 +65,8 @@ import com.example.data.Customer
 import com.example.data.ProductItem
 import com.example.ui.BillingViewModel
 import com.example.ui.UiState
+import com.example.ui.components.CustomerEditorDialog
+import com.example.ui.components.DeleteCustomerConfirmDialog
 import com.example.ui.components.EmptyStateCard
 import com.example.ui.components.MonoCodeText
 import com.example.ui.components.SectionHeader
@@ -82,6 +84,7 @@ fun CatalogScreen(
     var editingProduct by remember { mutableStateOf<ProductItem?>(null) }
     var showAddProduct by remember { mutableStateOf(false) }
     var editingCustomer by remember { mutableStateOf<Customer?>(null) }
+    var deletingCustomer by remember { mutableStateOf<Customer?>(null) }
     var showAddCustomer by remember { mutableStateOf(false) }
 
     LazyColumn(
@@ -470,29 +473,74 @@ fun CatalogScreen(
                                             if (cust.address.isNotBlank()) {
                                                 Text(cust.address, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                             }
+                                            if (cust.stateName.isNotBlank()) {
+                                                Text("State: ${cust.stateName}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                            }
                                             if (cust.gstin.isNotBlank()) {
                                                 MonoCodeText("GSTIN: ${cust.gstin}")
                                             }
                                         }
                                         Row {
-                                            IconButton(onClick = { editingCustomer = cust }, modifier = Modifier.size(44.dp)) {
-                                                Icon(Icons.Default.Edit, contentDescription = "Edit customer")
+                                            IconButton(
+                                                onClick = { editingCustomer = cust },
+                                                modifier = Modifier
+                                                    .minimumInteractiveComponentSize()
+                                                    .testTag("edit_customer_${cust.id}")
+                                            ) {
+                                                Icon(Icons.Default.Edit, contentDescription = "Edit saved customer ${cust.name}")
                                             }
-                                            IconButton(onClick = { viewModel.deleteCustomer(cust.id) }, modifier = Modifier.size(44.dp)) {
-                                                Icon(Icons.Default.DeleteOutline, contentDescription = "Delete customer", tint = MaterialTheme.colorScheme.error)
+                                            IconButton(
+                                                onClick = { deletingCustomer = cust },
+                                                modifier = Modifier
+                                                    .minimumInteractiveComponentSize()
+                                                    .testTag("delete_customer_${cust.id}")
+                                            ) {
+                                                Icon(
+                                                    Icons.Default.DeleteOutline,
+                                                    contentDescription = "Delete saved customer ${cust.name}",
+                                                    tint = MaterialTheme.colorScheme.error
+                                                )
                                             }
                                         }
                                     }
-                                    OutlinedButton(
-                                        onClick = { onBillCustomer(cust) },
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .heightIn(min = 44.dp)
-                                            .testTag("bill_customer_${cust.id}")
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                                     ) {
-                                        Icon(Icons.Default.Receipt, contentDescription = null, modifier = Modifier.size(16.dp))
-                                        Spacer(Modifier.width(6.dp))
-                                        Text("Make New Bill for ${cust.name}")
+                                        OutlinedButton(
+                                            onClick = { onBillCustomer(cust) },
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .heightIn(min = 48.dp)
+                                                .testTag("bill_customer_${cust.id}")
+                                        ) {
+                                            Icon(Icons.Default.Receipt, contentDescription = null, modifier = Modifier.size(16.dp))
+                                            Spacer(Modifier.width(6.dp))
+                                            Text("New Bill")
+                                        }
+                                        OutlinedButton(
+                                            onClick = { editingCustomer = cust },
+                                            modifier = Modifier
+                                                .heightIn(min = 48.dp)
+                                                .testTag("edit_customer_btn_${cust.id}")
+                                        ) {
+                                            Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(16.dp))
+                                            Spacer(Modifier.width(4.dp))
+                                            Text("Edit")
+                                        }
+                                        OutlinedButton(
+                                            onClick = { deletingCustomer = cust },
+                                            modifier = Modifier
+                                                .heightIn(min = 48.dp)
+                                                .testTag("delete_customer_btn_${cust.id}")
+                                        ) {
+                                            Icon(
+                                                Icons.Default.DeleteOutline,
+                                                contentDescription = null,
+                                                tint = MaterialTheme.colorScheme.error,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                        }
                                     }
                                 }
                             }
@@ -529,6 +577,17 @@ fun CatalogScreen(
                 viewModel.saveCustomer(cust)
                 showAddCustomer = false
                 editingCustomer = null
+            }
+        )
+    }
+
+    deletingCustomer?.let { target ->
+        DeleteCustomerConfirmDialog(
+            customer = target,
+            onDismiss = { deletingCustomer = null },
+            onConfirmDelete = { cust ->
+                viewModel.deleteCustomer(cust.id)
+                deletingCustomer = null
             }
         )
     }
@@ -695,88 +754,3 @@ private fun ProductEditorDialog(
     )
 }
 
-@Composable
-private fun CustomerEditorDialog(
-    initial: Customer?,
-    onDismiss: () -> Unit,
-    onSave: (Customer) -> Unit
-) {
-    var name by remember { mutableStateOf(initial?.name ?: "") }
-    var phone by remember { mutableStateOf(initial?.phone ?: "") }
-    var address by remember { mutableStateOf(initial?.address ?: "") }
-    var gstin by remember { mutableStateOf(initial?.gstin ?: "") }
-    var stateName by remember { mutableStateOf(initial?.stateName ?: "") }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(if (initial == null) "Add Customer" else "Edit Customer") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(
-                    value = name,
-                    onValueChange = { name = it },
-                    label = { Text("Customer Name *") },
-                    singleLine = true,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("customer_name_input")
-                )
-                OutlinedTextField(
-                    value = phone,
-                    onValueChange = { phone = it },
-                    label = { Text("Mobile Number") },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
-                    singleLine = true,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("customer_phone_input")
-                )
-                OutlinedTextField(
-                    value = address,
-                    onValueChange = { address = it },
-                    label = { Text("Full Address") },
-                    maxLines = 3,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("customer_address_input")
-                )
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(
-                        value = gstin,
-                        onValueChange = { gstin = it.uppercase() },
-                        label = { Text("GSTIN (Optional)") },
-                        singleLine = true,
-                        modifier = Modifier.weight(1f)
-                    )
-                    OutlinedTextField(
-                        value = stateName,
-                        onValueChange = { stateName = it },
-                        label = { Text("State") },
-                        singleLine = true,
-                        modifier = Modifier.weight(1f)
-                    )
-                }
-            }
-        },
-        confirmButton = {
-            Button(
-                onClick = {
-                    onSave(
-                        (initial ?: Customer()).copy(
-                            name = name.trim(),
-                            phone = phone.trim(),
-                            address = address.trim(),
-                            gstin = gstin.trim().uppercase(),
-                            stateName = stateName.trim()
-                        )
-                    )
-                },
-                enabled = name.isNotBlank(),
-                modifier = Modifier.testTag("save_customer_button")
-            ) { Text("Save Customer") }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Cancel") }
-        }
-    )
-}

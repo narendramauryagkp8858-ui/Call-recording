@@ -139,4 +139,40 @@ class BillingLogicTest {
             com.example.billing.StockManager.getStockStatus(9.0, 5.0)
         )
     }
+
+    @Test
+    fun appMigration_resolvesMonotonicVersionCodeNeverDowngrades() {
+        assertEquals(
+            2,
+            com.example.data.AppDataMigrationManager.resolveMonotonicVersionCode(baseVersionCode = 2, ciRunCode = null)
+        )
+        assertEquals(
+            12,
+            com.example.data.AppDataMigrationManager.resolveMonotonicVersionCode(baseVersionCode = 2, ciRunCode = 12)
+        )
+        assertEquals(
+            20,
+            com.example.data.AppDataMigrationManager.resolveMonotonicVersionCode(baseVersionCode = 20, ciRunCode = 5)
+        )
+    }
+
+    @Test
+    fun customer_createAndUpdateMaps_preserveTrimmedFieldsAndUppercaseGstin() {
+        val edited = com.example.data.Customer(
+            id = "cust_1",
+            name = "  Ramesh Traders  ",
+            phone = " 9876543210 ",
+            address = "  Main Bazaar, Lucknow ",
+            gstin = " 09abcde1234f1z5 ",
+            stateName = " Uttar Pradesh "
+        )
+        val updateMap = edited.toUpdateMap()
+        assertEquals("Ramesh Traders", updateMap["name"])
+        assertEquals("9876543210", updateMap["phone"])
+        assertEquals("Main Bazaar, Lucknow", updateMap["address"])
+        assertEquals("09ABCDE1234F1Z5", updateMap["gstin"])
+        assertEquals("Uttar Pradesh", updateMap["stateName"])
+        assertFalse(updateMap.containsKey("createdAt"))
+        assertTrue(updateMap.containsKey("updatedAt"))
+    }
 }

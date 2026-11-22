@@ -475,7 +475,26 @@ class BillingViewModel(
     fun saveCustomer(customer: Customer) {
         viewModelScope.launch {
             repository.saveCustomer(customer)
-                .onSuccess { _statusMessage.value = "Customer \"${customer.name}\" saved" }
+                .onSuccess {
+                    val isUpdate = customer.id.isNotBlank()
+                    _draftBill.update { state ->
+                        if (isUpdate && state.selectedCustomerId == customer.id) {
+                            state.copy(
+                                customerName = customer.name,
+                                customerPhone = customer.phone,
+                                customerAddress = customer.address,
+                                customerGstin = customer.gstin
+                            )
+                        } else {
+                            state
+                        }
+                    }
+                    _statusMessage.value = if (isUpdate) {
+                        "Customer \"${customer.name}\" updated"
+                    } else {
+                        "Customer \"${customer.name}\" saved"
+                    }
+                }
                 .onFailure { _statusMessage.value = it.localizedMessage ?: "Failed to save customer" }
         }
     }
@@ -483,7 +502,12 @@ class BillingViewModel(
     fun deleteCustomer(customerId: String) {
         viewModelScope.launch {
             repository.deleteCustomer(customerId)
-                .onSuccess { _statusMessage.value = "Customer deleted" }
+                .onSuccess {
+                    if (_draftBill.value.selectedCustomerId == customerId) {
+                        clearSelectedCustomer()
+                    }
+                    _statusMessage.value = "Customer deleted"
+                }
                 .onFailure { _statusMessage.value = it.localizedMessage ?: "Failed to delete customer" }
         }
     }

@@ -52,6 +52,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -76,6 +77,8 @@ import com.example.ui.BillingViewModel
 import com.example.ui.DraftBillLine
 import com.example.ui.DraftBillState
 import com.example.ui.UiState
+import com.example.ui.components.CustomerEditorDialog
+import com.example.ui.components.DeleteCustomerConfirmDialog
 import com.example.ui.components.EmptyStateCard
 import com.example.ui.components.MonoCodeText
 import com.example.ui.components.SectionHeader
@@ -107,9 +110,17 @@ fun CreateBillScreen(
     }
 
     var showCustomerPicker by remember { mutableStateOf(false) }
+    var showAddCustomerDialog by remember { mutableStateOf(false) }
+    var editingCustomer by remember { mutableStateOf<Customer?>(null) }
+    var deletingCustomer by remember { mutableStateOf<Customer?>(null) }
     var showProductPicker by remember { mutableStateOf(false) }
     var showCustomItemDialog by remember { mutableStateOf(false) }
     var editingLine by remember { mutableStateOf<DraftBillLine?>(null) }
+
+    val selectedSavedCustomer = remember(customers, draft.selectedCustomerId) {
+        if (draft.selectedCustomerId.isBlank()) null
+        else customers.firstOrNull { it.id == draft.selectedCustomerId }
+    }
 
     val totals = remember(draft.lines, draft.interState) { draft.totals() }
 
@@ -247,13 +258,69 @@ fun CreateBillScreen(
                             OutlinedButton(
                                 onClick = { showCustomerPicker = true },
                                 modifier = Modifier
-                                    .heightIn(min = 40.dp)
+                                    .heightIn(min = 48.dp)
                                     .testTag("pick_customer_button"),
                                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
                             ) {
                                 Icon(Icons.Default.PersonSearch, contentDescription = null, modifier = Modifier.size(16.dp))
                                 Spacer(Modifier.width(6.dp))
                                 Text("Saved (${customers.size})")
+                            }
+                        }
+                    }
+
+                    if (selectedSavedCustomer != null) {
+                        Surface(
+                            color = MaterialTheme.colorScheme.secondaryContainer,
+                            shape = MaterialTheme.shapes.small,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("selected_saved_customer_bar")
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "Saved: ${selectedSavedCustomer.name}",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                                    TextButton(
+                                        onClick = { editingCustomer = selectedSavedCustomer },
+                                        modifier = Modifier
+                                            .heightIn(min = 48.dp)
+                                            .testTag("edit_selected_customer_button"),
+                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                                    ) {
+                                        Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(16.dp))
+                                        Spacer(Modifier.width(4.dp))
+                                        Text("Edit")
+                                    }
+                                    TextButton(
+                                        onClick = { deletingCustomer = selectedSavedCustomer },
+                                        modifier = Modifier
+                                            .heightIn(min = 48.dp)
+                                            .testTag("delete_selected_customer_button"),
+                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                                    ) {
+                                        Icon(
+                                            Icons.Default.DeleteOutline,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.error,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                        Spacer(Modifier.width(4.dp))
+                                        Text("Delete", color = MaterialTheme.colorScheme.error)
+                                    }
+                                }
                             }
                         }
                     }
@@ -663,6 +730,35 @@ fun CreateBillScreen(
             onSelect = {
                 viewModel.selectCustomer(it)
                 showCustomerPicker = false
+            },
+            onAddNew = { showAddCustomerDialog = true },
+            onEdit = { editingCustomer = it },
+            onDelete = { deletingCustomer = it }
+        )
+    }
+
+    if (showAddCustomerDialog || editingCustomer != null) {
+        CustomerEditorDialog(
+            initial = editingCustomer,
+            onDismiss = {
+                showAddCustomerDialog = false
+                editingCustomer = null
+            },
+            onSave = { cust ->
+                viewModel.saveCustomer(cust)
+                showAddCustomerDialog = false
+                editingCustomer = null
+            }
+        )
+    }
+
+    deletingCustomer?.let { target ->
+        DeleteCustomerConfirmDialog(
+            customer = target,
+            onDismiss = { deletingCustomer = null },
+            onConfirmDelete = { cust ->
+                viewModel.deleteCustomer(cust.id)
+                deletingCustomer = null
             }
         )
     }
@@ -820,7 +916,10 @@ private fun SummaryRow(label: String, value: String) {
 private fun CustomerPickerDialog(
     customers: List<Customer>,
     onDismiss: () -> Unit,
-    onSelect: (Customer) -> Unit
+    onSelect: (Customer) -> Unit,
+    onAddNew: () -> Unit,
+    onEdit: (Customer) -> Unit,
+    onDelete: (Customer) -> Unit
 ) {
     var query by remember { mutableStateOf("") }
     val filtered = remember(customers, query) {
@@ -831,7 +930,25 @@ private fun CustomerPickerDialog(
     }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Select Customer") },
+        title = {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("Saved Customers (${customers.size})")
+                TextButton(
+                    onClick = onAddNew,
+                    modifier = Modifier
+                        .heightIn(min = 48.dp)
+                        .testTag("picker_add_customer_button")
+                ) {
+                    Icon(Icons.Default.PersonAdd, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("Add New")
+                }
+            }
+        },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 OutlinedTextField(
@@ -839,27 +956,78 @@ private fun CustomerPickerDialog(
                     onValueChange = { query = it },
                     label = { Text("Search name, mobile or address") },
                     singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("picker_customer_search_input")
                 )
                 if (filtered.isEmpty()) {
-                    Text("No matching saved customers.", style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        if (customers.isEmpty()) "No saved customers yet. Tap Add New to save one."
+                        else "No matching saved customers.",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
                 } else {
-                    LazyColumn(modifier = Modifier.heightIn(max = 300.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    LazyColumn(modifier = Modifier.heightIn(max = 320.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         items(filtered, key = { it.id }) { cust ->
                             Surface(
                                 onClick = { onSelect(cust) },
                                 shape = MaterialTheme.shapes.small,
                                 color = MaterialTheme.colorScheme.surfaceContainerLow,
-                                modifier = Modifier.fillMaxWidth()
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("picker_select_customer_${cust.id}")
                             ) {
-                                Column(Modifier.padding(12.dp)) {
-                                    Text(cust.name, style = MaterialTheme.typography.titleSmall)
-                                    Text(
-                                        listOf(cust.phone, cust.address).filter { it.isNotBlank() }.joinToString(" • "),
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        maxLines = 2
-                                    )
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(start = 12.dp, top = 8.dp, bottom = 8.dp, end = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(cust.name, style = MaterialTheme.typography.titleSmall)
+                                        val details = listOf(cust.phone, cust.address)
+                                            .filter { it.isNotBlank() }
+                                            .joinToString(" • ")
+                                        if (details.isNotBlank()) {
+                                            Text(
+                                                details,
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                maxLines = 2
+                                            )
+                                        }
+                                        if (cust.gstin.isNotBlank()) {
+                                            MonoCodeText("GSTIN: ${cust.gstin}")
+                                        }
+                                    }
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        IconButton(
+                                            onClick = { onEdit(cust) },
+                                            modifier = Modifier
+                                                .minimumInteractiveComponentSize()
+                                                .testTag("picker_edit_customer_${cust.id}")
+                                        ) {
+                                            Icon(
+                                                Icons.Default.Edit,
+                                                contentDescription = "Edit saved customer ${cust.name}",
+                                                modifier = Modifier.size(20.dp)
+                                            )
+                                        }
+                                        IconButton(
+                                            onClick = { onDelete(cust) },
+                                            modifier = Modifier
+                                                .minimumInteractiveComponentSize()
+                                                .testTag("picker_delete_customer_${cust.id}")
+                                        ) {
+                                            Icon(
+                                                Icons.Default.DeleteOutline,
+                                                contentDescription = "Delete saved customer ${cust.name}",
+                                                tint = MaterialTheme.colorScheme.error,
+                                                modifier = Modifier.size(20.dp)
+                                            )
+                                        }
+                                    }
                                 }
                             }
                         }

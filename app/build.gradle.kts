@@ -1,4 +1,5 @@
 import com.google.gms.googleservices.GoogleServicesPlugin.MissingGoogleServicesStrategy
+import java.util.Properties
 
 plugins {
   alias(libs.plugins.android.application)
@@ -9,6 +10,21 @@ plugins {
   alias(libs.plugins.kotlin.serialization)
 }
 
+val versionPropsFile = rootProject.file("version.properties")
+val versionProps = Properties().apply {
+  if (versionPropsFile.exists()) {
+    versionPropsFile.inputStream().use { load(it) }
+  }
+}
+val baseVersionCode = versionProps.getProperty("VERSION_CODE")?.trim()?.toIntOrNull() ?: 2
+val baseVersionName = versionProps.getProperty("VERSION_NAME")?.trim()?.takeIf { it.isNotEmpty() } ?: "1.1"
+val overrideVersionCode = providers.gradleProperty("APP_VERSION_CODE").orNull?.toIntOrNull()
+  ?: providers.environmentVariable("APP_VERSION_CODE").orNull?.toIntOrNull()
+val overrideVersionName = providers.gradleProperty("APP_VERSION_NAME").orNull?.takeIf { it.isNotBlank() }
+  ?: providers.environmentVariable("APP_VERSION_NAME").orNull?.takeIf { it.isNotBlank() }
+val resolvedVersionCode = maxOf(baseVersionCode, overrideVersionCode ?: baseVersionCode)
+val resolvedVersionName = overrideVersionName ?: baseVersionName
+
 android {
   namespace = "com.example"
   compileSdk { version = release(36) { minorApiLevel = 1 } }
@@ -17,8 +33,8 @@ android {
     applicationId = "com.aistudio.narendrabilling.kqvxpm"
     minSdk = 24
     targetSdk = 36
-    versionCode = 1
-    versionName = "1.0"
+    versionCode = resolvedVersionCode
+    versionName = resolvedVersionName
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 

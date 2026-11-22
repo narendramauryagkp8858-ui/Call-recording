@@ -52,6 +52,7 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.example.billing.InvoicePdfGenerator
 import com.example.billing.ThermalPrinterManager
+import com.example.data.AppDataMigrationManager
 import com.example.data.BillingRepository
 import com.example.data.Invoice
 import com.example.data.PrinterConfig
@@ -97,6 +98,10 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun AppNavigation(auth: FirebaseAuth = Firebase.auth) {
+    val context = LocalContext.current
+    LaunchedEffect(Unit) {
+        AppDataMigrationManager.recordSafeLaunch(context.applicationContext)
+    }
     val currentUser by auth.authStateFlow().collectAsStateWithLifecycle(initialValue = auth.currentUser)
     val user = currentUser
     if (user == null) {

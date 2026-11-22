@@ -47,7 +47,7 @@ private tailrec fun Context.findActivity(): Activity? = when (this) {
 }
 
 @Suppress("DEPRECATION")
-private fun getAppSigningSha1(context: Context): String {
+fun getAppSigningSha1(context: Context): String {
     return try {
         val pm = context.packageManager
         val signatures = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
