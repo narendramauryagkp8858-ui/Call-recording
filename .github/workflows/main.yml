@@ -44,16 +44,17 @@ jobs:
           DEBUG_KEYSTORE_BASE64: ${{ secrets.DEBUG_KEYSTORE_BASE64 }}
         run: |
           EXPECTED_SHA1="84475d3d607acd7a6149834c02afe23a6b015410"
+          CLEAN_KEYSTORE_B64="$(printf '%s' "$DEBUG_KEYSTORE_BASE64" | tr -d '[:space:]')"
           if [ ! -f debug.keystore ] && [ -f debug.keystore.base64 ]; then
-            base64 -d debug.keystore.base64 > debug.keystore
+            tr -d '[:space:]' < debug.keystore.base64 | base64 -d > debug.keystore
             echo "Restored debug.keystore from committed debug.keystore.base64"
-          elif [ ! -f debug.keystore ] && [ -n "$DEBUG_KEYSTORE_BASE64" ]; then
-            printf '%s' "$DEBUG_KEYSTORE_BASE64" | tr -d '[:space:]' | base64 -d > debug.keystore
+          elif [ ! -f debug.keystore ] && [ -n "$CLEAN_KEYSTORE_B64" ]; then
+            printf '%s' "$CLEAN_KEYSTORE_B64" | base64 -d > debug.keystore
             echo "Restored debug.keystore from DEBUG_KEYSTORE_BASE64 secret"
           fi
 
           if [ ! -f debug.keystore ]; then
-            echo "::error::Original debug.keystore / debug.keystore.base64 is missing! Refusing to generate a new keystore because a different key cannot update the existing installed APK."
+            echo "::error::Original debug.keystore / debug.keystore.base64 is missing! Add GitHub Secret DEBUG_KEYSTORE_BASE64 (Settings -> Secrets and variables -> Actions -> New repository secret) with the base64 of your original debug.keystore (SHA-1: $EXPECTED_SHA1). Refusing to generate a new keystore because a different key cannot update the existing installed APK."
             exit 1
           fi
 
