@@ -284,13 +284,26 @@ object InvoicePdfGenerator {
 
             val payLabel = "Payment Mode: ${PaymentMode.fromRaw(invoice.paymentMode).label}"
             canvas.drawText(payLabel, MARGIN, summaryTop + wordsLayout.height + 20f, boldPaint)
+            var leftExtraY = summaryTop + wordsLayout.height + 28f
             if (invoice.notes.isNotBlank()) {
                 val notesLayout = StaticLayout.Builder.obtain(
                     "Note: ${invoice.notes}", 0, "Note: ${invoice.notes}".length, mutedPaint, leftWidth
                 ).setMaxLines(2).build()
                 canvas.save()
-                canvas.translate(MARGIN, summaryTop + wordsLayout.height + 28f)
+                canvas.translate(MARGIN, leftExtraY)
                 notesLayout.draw(canvas)
+                canvas.restore()
+                leftExtraY += notesLayout.height + 4f
+            }
+            if (WarrantyManager.isWarrantyActiveOnBill(invoice)) {
+                val wEval = WarrantyManager.evaluate(invoice)
+                val wText = "Warranty: ${wEval.displayLabel} (Valid till ${WarrantyManager.formatExpiryDate(wEval.expiryDateMillis)})"
+                val wLayout = StaticLayout.Builder.obtain(
+                    wText, 0, wText.length, boldPaint, leftWidth
+                ).setMaxLines(2).build()
+                canvas.save()
+                canvas.translate(MARGIN, leftExtraY + 2f)
+                wLayout.draw(canvas)
                 canvas.restore()
             }
 
@@ -407,6 +420,10 @@ object InvoicePdfGenerator {
             append("GST Bill No: ${invoice.invoiceNumber}\n")
             append("Customer: ${invoice.customerName}\n")
             append("Grand Total: ${GstCalculator.formatRupees(invoice.grandTotal)}\n")
+            if (WarrantyManager.isWarrantyActiveOnBill(invoice)) {
+                val wEval = WarrantyManager.evaluate(invoice)
+                append("Warranty: ${wEval.displayLabel} (Till ${WarrantyManager.formatExpiryDate(wEval.expiryDateMillis)})\n")
+            }
             append("Thank you!")
         }
         val baseIntent = Intent(Intent.ACTION_SEND).apply {

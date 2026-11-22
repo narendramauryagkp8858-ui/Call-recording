@@ -62,6 +62,9 @@ import androidx.compose.ui.unit.dp
 import com.example.billing.EditedInvoiceLine
 import com.example.billing.GstCalculator
 import com.example.billing.StockManager
+import com.example.billing.WarrantyEvaluation
+import com.example.billing.WarrantyManager
+import com.example.billing.WarrantyStatus
 import com.example.data.Invoice
 import com.example.data.PaymentMode
 import com.example.data.ProductItem
@@ -70,6 +73,8 @@ import com.example.ui.UiState
 import com.example.ui.components.EmptyStateCard
 import com.example.ui.components.MonoCodeText
 import com.example.ui.components.SectionHeader
+import com.example.ui.components.WarrantyExpiryAlertBanner
+import com.example.ui.components.WarrantyOptionSection
 import com.example.ui.theme.WhatsAppGreen
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -81,6 +86,9 @@ fun InvoicesScreen(
     viewModel: BillingViewModel,
     invoicesState: UiState<List<Invoice>>,
     productsState: UiState<List<ProductItem>>,
+    expiringWarranties: List<Pair<Invoice, WarrantyEvaluation>> = emptyList(),
+    nowMillis: Long = System.currentTimeMillis(),
+    onOpenWarrantyNotifications: () -> Unit = {},
     onGoToNewBill: () -> Unit,
     onPreviewPdf: (Invoice) -> Unit,
     onShareWhatsApp: (Invoice) -> Unit,
@@ -165,6 +173,15 @@ fun InvoicesScreen(
                                 )
                             }
                         }
+                    }
+                }
+
+                if (expiringWarranties.isNotEmpty()) {
+                    item {
+                        WarrantyExpiryAlertBanner(
+                            expiring = expiringWarranties,
+                            onClick = onOpenWarrantyNotifications
+                        )
                     }
                 }
 
@@ -264,6 +281,34 @@ fun InvoicesScreen(
                                         maxLines = 2,
                                         overflow = TextOverflow.Ellipsis
                                     )
+                                }
+
+                                val warrantyEval = WarrantyManager.evaluate(inv, nowMillis)
+                                if (warrantyEval.status == WarrantyStatus.ACTIVE || warrantyEval.status == WarrantyStatus.EXPIRING_SOON) {
+                                    val isSoon = warrantyEval.status == WarrantyStatus.EXPIRING_SOON
+                                    Surface(
+                                        color = if (isSoon) {
+                                            MaterialTheme.colorScheme.errorContainer
+                                        } else {
+                                            MaterialTheme.colorScheme.tertiaryContainer
+                                        },
+                                        shape = MaterialTheme.shapes.small,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .testTag("invoice_warranty_badge_${inv.id}")
+                                    ) {
+                                        Text(
+                                            text = warrantyEval.badgeText,
+                                            style = MaterialTheme.typography.labelMedium,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = if (isSoon) {
+                                                MaterialTheme.colorScheme.onErrorContainer
+                                            } else {
+                                                MaterialTheme.colorScheme.onTertiaryContainer
+                                            },
+                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                                        )
+                                    }
                                 }
 
                                 Row(
@@ -497,6 +542,21 @@ private fun EditInvoiceReturnDialog(
     var includeSignature by remember(invoice.id) { mutableStateOf(invoice.includeSignature) }
     var paymentMode by remember(invoice.id) { mutableStateOf(PaymentMode.fromRaw(invoice.paymentMode)) }
     var notes by remember(invoice.id) { mutableStateOf(invoice.notes) }
+    val initialWarrantyActive = remember(invoice.id) { WarrantyManager.isWarrantyActiveOnBill(invoice) }
+    var hasWarranty by remember(invoice.id) { mutableStateOf(initialWarrantyActive) }
+    var warrantyMonths by remember(invoice.id) {
+        mutableStateOf(if (initialWarrantyActive) invoice.warrantyMonths else 0)
+    }
+    var warrantyDays by remember(invoice.id) {
+        mutableStateOf(if (initialWarrantyActive) invoice.warrantyDays else 0)
+    }
+    var warrantyNote by remember(invoice.id) {
+        mutableStateOf(
+            if (initialWarrantyActive) {
+                invoice.warrantyLabel.substringAfter("(", "").removeSuffix(")").trim()
+            } else ""
+        )
+    }
 
     var lines by remember(invoice.id) {
         mutableStateOf(
@@ -529,9 +589,13 @@ private fun EditInvoiceReturnDialog(
         includeSignature,
         paymentMode,
         notes,
+        hasWarranty,
+        warrantyMonths,
+        warrantyDays,
+        warrantyNote,
         productsById
     ) {
-        StockManager.recalculateEditedInvoice(
+        val baseRecalc = StockManager.recalculateEditedInvoice(
             original = invoice,
             editedLines = lines,
             productsById = productsById,
@@ -544,6 +608,17 @@ private fun EditInvoiceReturnDialog(
             includeSignature = includeSignature,
             paymentMode = paymentMode,
             notes = notes
+        )
+        val computedEnd = if (hasWarranty) {
+            WarrantyManager.computeWarrantyEndMillis(invoice.issuedAtMillis, warrantyMonths, warrantyDays)
+        } else 0L
+        val validWarranty = hasWarranty && computedEnd > 0L
+        baseRecalc.copy(
+            hasWarranty = validWarranty,
+            warrantyMonths = if (validWarranty) warrantyMonths else 0,
+            warrantyDays = if (validWarranty) warrantyDays else 0,
+            warrantyEndMillis = if (validWarranty) computedEnd else 0L,
+            warrantyLabel = if (validWarranty) WarrantyManager.formatWarrantyLabel(warrantyMonths, warrantyDays, warrantyNote) else ""
         )
     }
 
@@ -860,6 +935,31 @@ private fun EditInvoiceReturnDialog(
                         Text("Signature", style = MaterialTheme.typography.bodySmall)
                     }
                 }
+                HorizontalDivider()
+                WarrantyOptionSection(
+                    enabled = hasWarranty,
+                    months = warrantyMonths,
+                    days = warrantyDays,
+                    note = warrantyNote,
+                    referenceStartMillis = invoice.issuedAtMillis,
+                    onToggle = { enabled ->
+                        hasWarranty = enabled
+                        if (enabled && warrantyMonths == 0 && warrantyDays == 0) {
+                            warrantyMonths = 12
+                        }
+                    },
+                    onPresetSelected = { m, d ->
+                        hasWarranty = true
+                        warrantyMonths = m
+                        warrantyDays = d
+                    },
+                    onCustomDurationChanged = { m, d ->
+                        hasWarranty = true
+                        warrantyMonths = m
+                        warrantyDays = d
+                    },
+                    onNoteChanged = { warrantyNote = it.take(60) }
+                )
                 OutlinedTextField(
                     value = notes,
                     onValueChange = { notes = it },

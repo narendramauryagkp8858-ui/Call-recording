@@ -401,6 +401,47 @@ class BillingRepository(
         }
     }
 
+    /**
+     * Automatically clears expired warranty metadata from bills without deleting or
+     * altering any invoice items, customer info, stock, GST totals, or billing history.
+     */
+    suspend fun clearExpiredWarrantiesBatch(invoiceIds: List<String>): Result<Int> {
+        val cleanIds = invoiceIds.filter { it.isNotBlank() }.distinct()
+        if (cleanIds.isEmpty()) return Result.success(0)
+        var docPath = "users/${auth.currentUser?.uid ?: "unauth"}/invoices/${cleanIds.first()}"
+        return try {
+            val uid = requireUserId()
+            val invoicesCol = userRoot(uid).collection("invoices")
+            var cleared = 0
+            cleanIds.chunked(400).forEach { chunk ->
+                val batch = db.batch()
+                chunk.forEach { id ->
+                    val ref = invoicesCol.document(id)
+                    docPath = ref.path
+                    batch.update(
+                        ref,
+                        mapOf(
+                            "hasWarranty" to false,
+                            "warrantyMonths" to 0,
+                            "warrantyDays" to 0,
+                            "warrantyEndMillis" to 0L,
+                            "warrantyLabel" to "",
+                            "updatedAt" to FieldValue.serverTimestamp()
+                        )
+                    )
+                    cleared += 1
+                }
+                batch.commit().await()
+            }
+            Result.success(cleared)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, docPath)
+            Result.failure(e)
+        }
+    }
+
     suspend fun updateInvoiceWithStockSync(updatedInvoice: Invoice): Result<InvoiceUpdateResult> {
         var docPath = "users/${auth.currentUser?.uid ?: "unauth"}/invoices/${updatedInvoice.id}"
         return try {

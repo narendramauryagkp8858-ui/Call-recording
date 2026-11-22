@@ -68,6 +68,8 @@ import androidx.compose.ui.unit.dp
 import com.example.billing.GstCalculator
 import com.example.billing.StockManager
 import com.example.billing.StockStatus
+import com.example.billing.WarrantyEvaluation
+import com.example.billing.WarrantyManager
 import com.example.data.Customer
 import com.example.data.Invoice
 import com.example.data.PaymentMode
@@ -82,6 +84,8 @@ import com.example.ui.components.DeleteCustomerConfirmDialog
 import com.example.ui.components.EmptyStateCard
 import com.example.ui.components.MonoCodeText
 import com.example.ui.components.SectionHeader
+import com.example.ui.components.WarrantyExpiryAlertBanner
+import com.example.ui.components.WarrantyOptionSection
 import com.example.ui.theme.WhatsAppGreen
 
 @Composable
@@ -92,6 +96,9 @@ fun CreateBillScreen(
     customersState: UiState<List<Customer>>,
     draft: DraftBillState,
     lastCreatedInvoice: Invoice?,
+    expiringWarranties: List<Pair<Invoice, WarrantyEvaluation>> = emptyList(),
+    onOpenWarrantyNotifications: () -> Unit = {},
+    onRequestWarrantyNotificationPermission: () -> Unit = {},
     onNavigateToShops: () -> Unit,
     onPreviewPdf: (Invoice) -> Unit,
     onShareWhatsApp: (Invoice) -> Unit,
@@ -134,6 +141,15 @@ fun CreateBillScreen(
                 title = "New GST Invoice",
                 subtitle = "Create bill with Shop Mohar, Sign & Bikri Rate only"
             )
+        }
+
+        if (expiringWarranties.isNotEmpty()) {
+            item {
+                WarrantyExpiryAlertBanner(
+                    expiring = expiringWarranties,
+                    onClick = onOpenWarrantyNotifications
+                )
+            }
         }
 
         // 1. Active Shop Selector
@@ -646,6 +662,40 @@ fun CreateBillScreen(
                         }
                     }
 
+                    HorizontalDivider()
+
+                    WarrantyOptionSection(
+                        enabled = draft.hasWarranty,
+                        months = draft.warrantyMonths,
+                        days = draft.warrantyDays,
+                        note = draft.warrantyNote,
+                        onToggle = { enabled ->
+                            viewModel.updateWarrantyOption(enabled = enabled)
+                            if (enabled) {
+                                onRequestWarrantyNotificationPermission()
+                            }
+                        },
+                        onPresetSelected = { m, d ->
+                            viewModel.updateWarrantyOption(
+                                enabled = true,
+                                months = m,
+                                days = d,
+                                customEndMillis = 0L
+                            )
+                        },
+                        onCustomDurationChanged = { m, d ->
+                            viewModel.updateWarrantyOption(
+                                enabled = true,
+                                months = m,
+                                days = d,
+                                customEndMillis = 0L
+                            )
+                        },
+                        onNoteChanged = { note ->
+                            viewModel.updateWarrantyOption(note = note)
+                        }
+                    )
+
                     OutlinedTextField(
                         value = draft.notes,
                         onValueChange = { viewModel.updateBillOptions(notes = it) },
@@ -828,6 +878,14 @@ fun CreateBillScreen(
                         style = MaterialTheme.typography.titleMedium,
                         color = MaterialTheme.colorScheme.primary
                     )
+                    if (WarrantyManager.isWarrantyActiveOnBill(lastCreatedInvoice)) {
+                        val wEval = WarrantyManager.evaluate(lastCreatedInvoice)
+                        Text(
+                            text = "Warranty: ${wEval.displayLabel} (Till ${WarrantyManager.formatExpiryDate(wEval.expiryDateMillis)})",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.tertiary
+                        )
+                    }
                     Text(
                         "You can preview the GST Tax Invoice PDF, share directly on WhatsApp, or print on your Bluetooth mini thermal printer.",
                         style = MaterialTheme.typography.bodySmall,

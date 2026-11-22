@@ -175,4 +175,103 @@ class BillingLogicTest {
         assertFalse(updateMap.containsKey("createdAt"))
         assertTrue(updateMap.containsKey("updatedAt"))
     }
+
+    @Test
+    fun warrantyManager_evaluatesActive_7DayAlertWindow_andAutoExpiryRemoval() {
+        val legacyInvoice = Invoice(invoiceNumber = "NRB-0009", grandTotal = 999.0)
+        assertEquals(
+            com.example.billing.WarrantyStatus.NONE,
+            com.example.billing.WarrantyManager.evaluate(legacyInvoice).status
+        )
+        assertFalse(com.example.billing.WarrantyManager.isWarrantyActiveOnBill(legacyInvoice))
+
+        val dayMillis = 86_400_000L
+        val issueCal = java.util.Calendar.getInstance().apply {
+            set(2026, java.util.Calendar.JANUARY, 1, 10, 0, 0)
+            set(java.util.Calendar.MILLISECOND, 0)
+        }
+        val issuedAt = issueCal.timeInMillis
+        val expiryMillis = com.example.billing.WarrantyManager.computeWarrantyEndMillis(
+            startMillis = issuedAt,
+            months = 0,
+            days = 10
+        )
+
+        val invoiceWithWarranty = Invoice(
+            invoiceNumber = "NRB-0010",
+            shopName = "Narendra Store",
+            customerName = "Ramesh",
+            grandTotal = 1500.0,
+            hasWarranty = true,
+            warrantyMonths = 0,
+            warrantyDays = 10,
+            warrantyEndMillis = expiryMillis,
+            warrantyLabel = com.example.billing.WarrantyManager.formatWarrantyLabel(0, 10, "Full Replacement"),
+            issuedAtMillis = issuedAt
+        )
+
+        // Day 1 (9 days remaining) -> ACTIVE, not yet in 7-day alert window
+        val day1Eval = com.example.billing.WarrantyManager.evaluate(invoiceWithWarranty, issuedAt + dayMillis)
+        assertEquals(com.example.billing.WarrantyStatus.ACTIVE, day1Eval.status)
+        assertEquals(9, day1Eval.daysRemaining)
+        assertTrue(com.example.billing.WarrantyManager.isWarrantyActiveOnBill(invoiceWithWarranty, issuedAt + dayMillis))
+        assertTrue(
+            com.example.billing.WarrantyManager.getExpiringSoonInvoices(
+                listOf(invoiceWithWarranty),
+                issuedAt + dayMillis
+            ).isEmpty()
+        )
+
+        // Day 3 (7 days remaining) -> EXPIRING_SOON notification window triggers!
+        val day3Now = issuedAt + 3 * dayMillis
+        val day3Eval = com.example.billing.WarrantyManager.evaluate(invoiceWithWarranty, day3Now)
+        assertEquals(com.example.billing.WarrantyStatus.EXPIRING_SOON, day3Eval.status)
+        assertEquals(7, day3Eval.daysRemaining)
+        assertTrue(com.example.billing.WarrantyManager.isWarrantyActiveOnBill(invoiceWithWarranty, day3Now))
+        assertEquals(
+            1,
+            com.example.billing.WarrantyManager.getExpiringSoonInvoices(listOf(invoiceWithWarranty), day3Now).size
+        )
+
+        // Receipt shows warranty while active/expiring soon
+        val activeReceipt = String(
+            ThermalPrinterManager.buildEscPosReceipt(invoiceWithWarranty, paperWidthMm = 58, nowMillis = day3Now),
+            Charsets.US_ASCII
+        )
+        assertTrue(activeReceipt.contains("Warranty:"))
+        assertTrue(activeReceipt.contains("Valid Till:"))
+
+        // Expiry day itself (0 days left) -> still EXPIRING_SOON
+        val expiryDayNoon = expiryMillis - 3_600_000L
+        val day10Eval = com.example.billing.WarrantyManager.evaluate(invoiceWithWarranty, expiryDayNoon)
+        assertEquals(com.example.billing.WarrantyStatus.EXPIRING_SOON, day10Eval.status)
+        assertEquals(0, day10Eval.daysRemaining)
+
+        // After expiry -> EXPIRED & automatically removed from bill/receipt & alerts
+        val afterExpiryNow = expiryMillis + 1_000L
+        val expiredEval = com.example.billing.WarrantyManager.evaluate(invoiceWithWarranty, afterExpiryNow)
+        assertEquals(com.example.billing.WarrantyStatus.EXPIRED, expiredEval.status)
+        assertFalse(com.example.billing.WarrantyManager.isWarrantyActiveOnBill(invoiceWithWarranty, afterExpiryNow))
+        assertTrue(
+            com.example.billing.WarrantyManager.getExpiringSoonInvoices(
+                listOf(invoiceWithWarranty),
+                afterExpiryNow
+            ).isEmpty()
+        )
+        assertEquals(
+            1,
+            com.example.billing.WarrantyManager.getExpiredTaggedInvoices(
+                listOf(invoiceWithWarranty),
+                afterExpiryNow
+            ).size
+        )
+
+        val expiredReceipt = String(
+            ThermalPrinterManager.buildEscPosReceipt(invoiceWithWarranty, paperWidthMm = 58, nowMillis = afterExpiryNow),
+            Charsets.US_ASCII
+        )
+        assertFalse(expiredReceipt.contains("Warranty:"))
+        assertFalse(expiredReceipt.contains("Valid Till:"))
+    }
 }
+

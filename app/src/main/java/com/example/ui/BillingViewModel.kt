@@ -7,6 +7,7 @@ import com.example.billing.ComputedLine
 import com.example.billing.GstCalculator
 import com.example.billing.InvoiceTotals
 import com.example.billing.StockStatus
+import com.example.billing.WarrantyManager
 import com.example.data.BillingRepository
 import com.example.data.Customer
 import com.example.data.Invoice
@@ -72,6 +73,11 @@ data class DraftBillState(
     val includeSignature: Boolean = true,
     val paymentMode: PaymentMode = PaymentMode.CASH,
     val notes: String = "",
+    val hasWarranty: Boolean = false,
+    val warrantyMonths: Int = 0,
+    val warrantyDays: Int = 0,
+    val warrantyCustomEndMillis: Long = 0L,
+    val warrantyNote: String = "",
     val lines: List<DraftBillLine> = emptyList(),
     val isSaving: Boolean = false
 ) {
@@ -123,6 +129,8 @@ class BillingViewModel(
 
     private val _statusMessage = MutableStateFlow<String?>(null)
     val statusMessage: StateFlow<String?> = _statusMessage.asStateFlow()
+
+    private val attemptedWarrantyClearIds = mutableSetOf<String>()
 
     fun consumeStatusMessage() {
         _statusMessage.value = null
@@ -203,6 +211,34 @@ class BillingViewModel(
                 includeSignature = includeSignature ?: it.includeSignature,
                 paymentMode = paymentMode ?: it.paymentMode,
                 notes = notes ?: it.notes
+            )
+        }
+    }
+
+    fun updateWarrantyOption(
+        enabled: Boolean? = null,
+        months: Int? = null,
+        days: Int? = null,
+        customEndMillis: Long? = null,
+        note: String? = null
+    ) {
+        _draftBill.update { state ->
+            val nextEnabled = enabled ?: state.hasWarranty
+            val nextMonths = (months ?: state.warrantyMonths).coerceIn(0, 1200)
+            val nextDays = (days ?: state.warrantyDays).coerceIn(0, 36500)
+            val nextCustom = (customEndMillis ?: state.warrantyCustomEndMillis).coerceAtLeast(0L)
+            val nextNote = (note ?: state.warrantyNote).take(60)
+            val effectiveMonths = if (nextEnabled && nextMonths == 0 && nextDays == 0 && nextCustom == 0L) {
+                12
+            } else {
+                nextMonths
+            }
+            state.copy(
+                hasWarranty = nextEnabled,
+                warrantyMonths = effectiveMonths,
+                warrantyDays = nextDays,
+                warrantyCustomEndMillis = nextCustom,
+                warrantyNote = nextNote
             )
         }
     }
@@ -328,6 +364,17 @@ class BillingViewModel(
             val paddedNo = activeShop.nextInvoiceNumber.toString().padStart(4, '0')
             val invoiceNumber = "${activeShop.invoicePrefix}$paddedNo"
 
+            val issuedAt = System.currentTimeMillis()
+            val warrantyEnd = when {
+                !state.hasWarranty -> 0L
+                state.warrantyCustomEndMillis > 0L -> WarrantyManager.endOfDayMillis(state.warrantyCustomEndMillis)
+                else -> WarrantyManager.computeWarrantyEndMillis(issuedAt, state.warrantyMonths, state.warrantyDays)
+            }
+            val warrantyActive = state.hasWarranty && warrantyEnd > 0L
+            val warrantyLabel = if (warrantyActive) {
+                WarrantyManager.formatWarrantyLabel(state.warrantyMonths, state.warrantyDays, state.warrantyNote)
+            } else ""
+
             val invoice = Invoice(
                 invoiceNumber = invoiceNumber,
                 shopId = activeShop.id,
@@ -353,7 +400,12 @@ class BillingViewModel(
                 estimatedProfit = totals.estimatedProfit,
                 paymentMode = state.paymentMode.name,
                 notes = state.notes.trim(),
-                issuedAtMillis = System.currentTimeMillis()
+                hasWarranty = warrantyActive,
+                warrantyMonths = if (warrantyActive) state.warrantyMonths else 0,
+                warrantyDays = if (warrantyActive) state.warrantyDays else 0,
+                warrantyEndMillis = if (warrantyActive) warrantyEnd else 0L,
+                warrantyLabel = warrantyLabel,
+                issuedAtMillis = issuedAt
             )
 
             val newCustomer = if (state.saveNewCustomer && state.selectedCustomerId.isBlank()) {
@@ -566,6 +618,19 @@ class BillingViewModel(
                     }
                 }
                 .onFailure { _statusMessage.value = it.localizedMessage ?: "Failed to delete bill" }
+        }
+    }
+
+    fun syncExpiredWarranties(invoices: List<Invoice>, nowMillis: Long = System.currentTimeMillis()) {
+        val expiredToClear = WarrantyManager.getExpiredTaggedInvoices(invoices, nowMillis)
+            .filter { it.id.isNotBlank() && attemptedWarrantyClearIds.add(it.id) }
+        if (expiredToClear.isEmpty()) return
+        val ids = expiredToClear.map { it.id }
+        viewModelScope.launch {
+            repository.clearExpiredWarrantiesBatch(ids)
+                .onFailure {
+                    attemptedWarrantyClearIds.removeAll(ids.toSet())
+                }
         }
     }
 

@@ -31,7 +31,7 @@ data class AppUpdateMeta(
 object AppDataMigrationManager {
 
     private const val TAG = "AppMigration"
-    private const val CURRENT_DATA_SCHEMA_VERSION = 2
+    private const val CURRENT_DATA_SCHEMA_VERSION = 3
 
     private val keyLastVersionCode = intPreferencesKey("last_version_code")
     private val keyPreviousVersionCode = intPreferencesKey("previous_version_code")

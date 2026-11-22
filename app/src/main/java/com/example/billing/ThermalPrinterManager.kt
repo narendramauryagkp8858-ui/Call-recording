@@ -76,7 +76,11 @@ object ThermalPrinterManager {
      * Builds ESC/POS commands for 58mm (32 columns) or 80mm (48 columns) mini thermal printers.
      * Displays ONLY Bikri/Selling Rate — NEVER Purchase/Khareed Rate.
      */
-    fun buildEscPosReceipt(invoice: Invoice, paperWidthMm: Int = 58): ByteArray {
+    fun buildEscPosReceipt(
+        invoice: Invoice,
+        paperWidthMm: Int = 58,
+        nowMillis: Long = System.currentTimeMillis()
+    ): ByteArray {
         val cols = if (paperWidthMm >= 80) 48 else 32
         val divider = "-".repeat(cols)
         val out = ByteArrayOutputStream()
@@ -158,6 +162,12 @@ object ThermalPrinterManager {
         writeText(padRow("GRAND TOTAL", "Rs.${String.format(Locale.US, "%.2f", invoice.grandTotal)}"))
         out.write(CMD_BOLD_OFF)
         writeText(padRow("Paid Via", PaymentMode.fromRaw(invoice.paymentMode).label))
+        if (WarrantyManager.isWarrantyActiveOnBill(invoice, nowMillis)) {
+            val wEval = WarrantyManager.evaluate(invoice, nowMillis)
+            writeText(divider)
+            writeText("Warranty: ${wEval.displayLabel}".take(cols))
+            writeText("Valid Till: ${WarrantyManager.formatExpiryDate(wEval.expiryDateMillis)}".take(cols))
+        }
         writeText(divider)
         out.write(CMD_ALIGN_CENTER)
         writeText("Thank You! Visit Again")

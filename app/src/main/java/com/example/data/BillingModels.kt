@@ -207,6 +207,11 @@ data class Invoice(
     val estimatedProfit: Double = 0.0, // Private shopkeeper analytics ONLY
     val paymentMode: String = PaymentMode.CASH.name,
     val notes: String = "",
+    val hasWarranty: Boolean = false,
+    val warrantyMonths: Int = 0,
+    val warrantyDays: Int = 0,
+    val warrantyEndMillis: Long = 0L,
+    val warrantyLabel: String = "",
     val issuedAtMillis: Long = System.currentTimeMillis(),
     @ServerTimestamp val createdAt: Timestamp? = null,
     @ServerTimestamp val updatedAt: Timestamp? = null
@@ -236,6 +241,11 @@ data class Invoice(
         "estimatedProfit" to estimatedProfit.coerceIn(-1_000_000_000.0, 1_000_000_000.0),
         "paymentMode" to PaymentMode.fromRaw(paymentMode).name,
         "notes" to notes.trim().take(300),
+        "hasWarranty" to hasWarranty,
+        "warrantyMonths" to warrantyMonths.coerceIn(0, 1200),
+        "warrantyDays" to warrantyDays.coerceIn(0, 36500),
+        "warrantyEndMillis" to warrantyEndMillis.coerceAtLeast(0L),
+        "warrantyLabel" to warrantyLabel.trim().take(100),
         "issuedAtMillis" to issuedAtMillis.coerceAtLeast(1L),
         "createdAt" to FieldValue.serverTimestamp(),
         "updatedAt" to FieldValue.serverTimestamp()
@@ -260,6 +270,11 @@ data class Invoice(
         "estimatedProfit" to estimatedProfit.coerceIn(-1_000_000_000.0, 1_000_000_000.0),
         "paymentMode" to PaymentMode.fromRaw(paymentMode).name,
         "notes" to notes.trim().take(300),
+        "hasWarranty" to hasWarranty,
+        "warrantyMonths" to warrantyMonths.coerceIn(0, 1200),
+        "warrantyDays" to warrantyDays.coerceIn(0, 36500),
+        "warrantyEndMillis" to warrantyEndMillis.coerceAtLeast(0L),
+        "warrantyLabel" to warrantyLabel.trim().take(100),
         "updatedAt" to FieldValue.serverTimestamp()
     )
 }

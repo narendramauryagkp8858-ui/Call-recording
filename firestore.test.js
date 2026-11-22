@@ -320,3 +320,41 @@ test("Owner can manage customers, invoices, and product returns; cross-user & im
   await assertFails(bobDb.collection("users").doc(ALICE_UID).collection("invoices").get());
   await assertFails(bobDb.collection("users").doc(ALICE_UID).collection("customers").doc("cust_1").get());
 });
+
+test("Owner can create invoice with warranty and auto-clear expired warranty without losing bill data", async () => {
+  const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
+  const created = new Date(Date.now() - 5000);
+  const warrantyEnd = Date.now() + 7 * 24 * 60 * 60 * 1000;
+
+  const invRef = aliceDb.collection("users").doc(ALICE_UID).collection("invoices").doc("inv_warranty");
+  await assertSucceeds(
+    invRef.set({
+      ...validInvoicePayload(created),
+      hasWarranty: true,
+      warrantyMonths: 12,
+      warrantyDays: 0,
+      warrantyEndMillis: warrantyEnd,
+      warrantyLabel: "1 Year Warranty",
+    })
+  );
+
+  // Auto-clearing expired warranty fields leaves invoice intact
+  await assertSucceeds(
+    invRef.update({
+      hasWarranty: false,
+      warrantyMonths: 0,
+      warrantyDays: 0,
+      warrantyEndMillis: 0,
+      warrantyLabel: "",
+      updatedAt: new Date(Date.now() - 500),
+    })
+  );
+
+  // Negative warranty months must be rejected
+  await assertFails(
+    invRef.update({
+      warrantyMonths: -1,
+      updatedAt: new Date(Date.now() - 200),
+    })
+  );
+});

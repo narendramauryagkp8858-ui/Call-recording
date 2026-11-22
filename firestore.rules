@@ -92,6 +92,11 @@ service cloud.firestore {
              data.estimatedProfit is number && data.estimatedProfit >= -1000000000 && data.estimatedProfit <= 1000000000 &&
              data.paymentMode in ['CASH', 'UPI', 'CARD', 'CREDIT'] &&
              data.notes is string && data.notes.size() <= 300 &&
+             (!('hasWarranty' in data) || data.hasWarranty is bool) &&
+             (!('warrantyMonths' in data) || (data.warrantyMonths is int && data.warrantyMonths >= 0 && data.warrantyMonths <= 1200)) &&
+             (!('warrantyDays' in data) || (data.warrantyDays is int && data.warrantyDays >= 0 && data.warrantyDays <= 36500)) &&
+             (!('warrantyEndMillis' in data) || (data.warrantyEndMillis is int && data.warrantyEndMillis >= 0)) &&
+             (!('warrantyLabel' in data) || (data.warrantyLabel is string && data.warrantyLabel.size() <= 100)) &&
              data.issuedAtMillis is int && data.issuedAtMillis > 0 &&
              data.createdAt is timestamp && data.createdAt <= request.time &&
              data.updatedAt is timestamp && data.updatedAt <= request.time;
@@ -194,6 +199,7 @@ service cloud.firestore {
                            'interState', 'includeStamp', 'includeSignature', 'items',
                            'subtotalTaxable', 'cgstAmount', 'sgstAmount', 'igstAmount', 'totalGstAmount',
                            'grandTotal', 'estimatedProfit', 'paymentMode', 'notes', 'issuedAtMillis',
+                           'hasWarranty', 'warrantyMonths', 'warrantyDays', 'warrantyEndMillis', 'warrantyLabel',
                            'createdAt', 'updatedAt'
                          ]) &&
                          isValidInvoice(incoming());
@@ -209,7 +215,9 @@ service cloud.firestore {
                            'interState', 'includeStamp', 'includeSignature', 'items',
                            'subtotalTaxable', 'cgstAmount', 'sgstAmount', 'igstAmount',
                            'totalGstAmount', 'grandTotal', 'estimatedProfit',
-                           'paymentMode', 'notes', 'updatedAt'
+                           'paymentMode', 'notes',
+                           'hasWarranty', 'warrantyMonths', 'warrantyDays', 'warrantyEndMillis', 'warrantyLabel',
+                           'updatedAt'
                          ]);
         allow delete: if isOwner(userId) && isValidId(invoiceId);
       }
