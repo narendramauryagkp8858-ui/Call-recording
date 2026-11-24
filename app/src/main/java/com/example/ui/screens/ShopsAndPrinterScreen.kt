@@ -384,7 +384,6 @@ fun ShopsAndPrinterScreen(
                 ) {
                     Text("App Version & Update Safety", style = MaterialTheme.typography.titleMedium)
                     MonoCodeText("Version: v${BuildConfig.VERSION_NAME} (versionCode ${BuildConfig.VERSION_CODE})")
-                    MonoCodeText("Package: ${BuildConfig.APPLICATION_ID}")
                     MonoCodeText("Signing SHA-1: $signingSha1")
                     Text(
                         text = if (updateMeta.upgradeCount > 0) {
