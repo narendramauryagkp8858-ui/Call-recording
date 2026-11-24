@@ -142,6 +142,15 @@ object ThermalPrinterManager {
 
         invoice.items.forEach { item ->
             writeText(item.name.take(cols))
+            if (item.imeiNumber.isNotBlank()) {
+                val (imei1, imei2) = MobileImeiHelper.splitImeiNumbers(item.imeiNumber)
+                if (imei1.isNotBlank() && imei2.isNotBlank()) {
+                    "IMEI: $imei1".chunked(cols).forEach { writeText(it) }
+                    "IMEI2: $imei2".chunked(cols).forEach { writeText(it) }
+                } else {
+                    "IMEI: ${item.imeiNumber}".chunked(cols).forEach { writeText(it) }
+                }
+            }
             val rateInfo = "${GstCalculator.formatPlainNumber(item.quantity)} ${item.unit} x ${
                 String.format(Locale.US, "%.2f", item.sellingRate)
             } (${GstCalculator.formatPlainNumber(item.gstRate)}%)"

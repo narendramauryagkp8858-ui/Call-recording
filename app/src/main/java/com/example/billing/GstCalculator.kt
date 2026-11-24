@@ -107,7 +107,8 @@ object GstCalculator {
         sellingRate: Double,
         purchaseRate: Double,
         gstRate: Double,
-        taxInclusive: Boolean
+        taxInclusive: Boolean,
+        imeiNumber: String = ""
     ): ComputedLine {
         val qty = quantity.coerceAtLeast(0.001)
         val sell = sellingRate.coerceAtLeast(0.0)
@@ -130,7 +131,8 @@ object GstCalculator {
             taxInclusive = taxInclusive,
             taxableAmount = calc.baseAmount,
             gstAmount = calc.totalGstAmount,
-            lineTotal = calc.grandTotal
+            lineTotal = calc.grandTotal,
+            imeiNumber = imeiNumber.trim().take(80)
         )
         // Profit is computed on pre-tax selling value vs purchase cost
         val costBase = if (taxInclusive && gstRate > 0.0) {

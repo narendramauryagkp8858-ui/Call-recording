@@ -20,6 +20,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Calculate
+import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.Print
 import androidx.compose.material.icons.filled.ReceiptLong
 import androidx.compose.material.icons.filled.Storefront
@@ -52,7 +53,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.credentials.CredentialManager
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.R
+import com.example.data.NetworkMonitor
 import com.example.data.attemptAutoSignIn
 import com.example.data.onGoogleSignInClicked
 
@@ -63,6 +66,8 @@ fun AuthScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val credentialManager = remember(context) { CredentialManager.create(context) }
+    val isOnline by NetworkMonitor.observeConnectivity(context)
+        .collectAsStateWithLifecycle(initialValue = NetworkMonitor.isOnline(context))
 
     var isLoading by remember { mutableStateOf(false) }
     var isAutoChecking by remember { mutableStateOf(true) }
@@ -167,6 +172,31 @@ fun AuthScreen(
                             title = "Built-in GST Calculator",
                             desc = "Instant Exclusive & Inclusive GST calculation with CGST, SGST, and IGST splits."
                         )
+                    }
+                }
+
+                if (!isOnline) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.secondaryContainer,
+                        shape = MaterialTheme.shapes.medium,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(12.dp),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.CloudOff,
+                                contentDescription = "Offline",
+                                tint = MaterialTheme.colorScheme.onSecondaryContainer
+                            )
+                            Text(
+                                text = "You are offline. Connect to internet once to sign in — after signing in, billing, PDF & printing work offline too.",
+                                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
                     }
                 }
 

@@ -19,6 +19,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AutoFixHigh
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Inventory2
@@ -28,10 +29,12 @@ import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -59,12 +62,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.example.billing.GstCalculator
+import com.example.billing.HsnAutoFillHelper
 import com.example.billing.StockManager
 import com.example.billing.StockStatus
 import com.example.data.Customer
 import com.example.data.ProductItem
 import com.example.ui.BillingViewModel
 import com.example.ui.UiState
+import com.example.ui.components.AutoFillHsnDialog
 import com.example.ui.components.CustomerEditorDialog
 import com.example.ui.components.DeleteCustomerConfirmDialog
 import com.example.ui.components.EmptyStateCard
@@ -83,6 +88,7 @@ fun CatalogScreen(
     var showLowStockOnly by remember { mutableStateOf(false) }
     var editingProduct by remember { mutableStateOf<ProductItem?>(null) }
     var showAddProduct by remember { mutableStateOf(false) }
+    var showAutoFillHsnDialog by remember { mutableStateOf(false) }
     var editingCustomer by remember { mutableStateOf<Customer?>(null) }
     var deletingCustomer by remember { mutableStateOf<Customer?>(null) }
     var showAddCustomer by remember { mutableStateOf(false) }
@@ -214,6 +220,55 @@ fun CatalogScreen(
                                                 }
                                             )
                                         }
+                                    }
+                                }
+                            }
+                        }
+
+                        item {
+                            val missingHsnCount = allProducts.count { it.hsnCode.isBlank() }
+                            Surface(
+                                color = MaterialTheme.colorScheme.surfaceContainerLow,
+                                shape = MaterialTheme.shapes.medium,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = "HSN Automatic Fill (All Products)",
+                                            style = MaterialTheme.typography.titleSmall,
+                                            fontWeight = FontWeight.SemiBold
+                                        )
+                                        Text(
+                                            text = if (missingHsnCount > 0) {
+                                                "$missingHsnCount of ${allProducts.size} items missing HSN code"
+                                            } else {
+                                                "All ${allProducts.size} items have HSN • Tap to review"
+                                            },
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = if (missingHsnCount > 0) {
+                                                MaterialTheme.colorScheme.primary
+                                            } else {
+                                                MaterialTheme.colorScheme.onSurfaceVariant
+                                            }
+                                        )
+                                    }
+                                    FilledTonalButton(
+                                        onClick = { showAutoFillHsnDialog = true },
+                                        modifier = Modifier
+                                            .heightIn(min = 48.dp)
+                                            .testTag("auto_fill_all_hsn_button"),
+                                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                                    ) {
+                                        Icon(Icons.Default.AutoFixHigh, contentDescription = null, modifier = Modifier.size(18.dp))
+                                        Spacer(Modifier.width(6.dp))
+                                        Text(if (missingHsnCount > 0) "Auto Fill ($missingHsnCount)" else "Auto Fill")
                                     }
                                 }
                             }
@@ -591,6 +646,18 @@ fun CatalogScreen(
             }
         )
     }
+
+    if (showAutoFillHsnDialog) {
+        val currentProducts = (productsState as? UiState.Success)?.data ?: emptyList()
+        AutoFillHsnDialog(
+            products = currentProducts,
+            onDismiss = { showAutoFillHsnDialog = false },
+            onApply = { updates ->
+                viewModel.autoFillProductsHsn(updates)
+                showAutoFillHsnDialog = false
+            }
+        )
+    }
 }
 
 @Composable
@@ -688,6 +755,27 @@ private fun ProductEditorDialog(
                         label = { Text("HSN") },
                         singleLine = true,
                         modifier = Modifier.weight(1f)
+                    )
+                }
+                val hsnSuggestion = remember(name) { HsnAutoFillHelper.suggestHsn(name) }
+                if (hsnSuggestion != null && hsn.trim().uppercase() != hsnSuggestion.hsnCode) {
+                    AssistChip(
+                        onClick = {
+                            hsn = hsnSuggestion.hsnCode
+                            if (initial == null) {
+                                gstRate = GstCalculator.formatPlainNumber(hsnSuggestion.gstRate)
+                            }
+                        },
+                        leadingIcon = {
+                            Icon(Icons.Default.AutoFixHigh, contentDescription = null, modifier = Modifier.size(16.dp))
+                        },
+                        label = {
+                            Text(
+                                "Auto HSN: ${hsnSuggestion.hsnCode} (${hsnSuggestion.category} • ${GstCalculator.formatPlainNumber(hsnSuggestion.gstRate)}%)",
+                                style = MaterialTheme.typography.labelSmall
+                            )
+                        },
+                        modifier = Modifier.testTag("product_hsn_suggest_chip")
                     )
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

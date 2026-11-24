@@ -11,12 +11,16 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Calculate
+import androidx.compose.material.icons.filled.CloudDone
+import androidx.compose.material.icons.filled.CloudOff
+import androidx.compose.material.icons.filled.CloudSync
 import androidx.compose.material.icons.filled.Inventory2
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.NotificationsActive
@@ -49,6 +53,7 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -71,13 +76,17 @@ import com.example.billing.WarrantyManager
 import com.example.billing.WarrantyNotificationHelper
 import com.example.data.AppDataMigrationManager
 import com.example.data.BillingRepository
+import com.example.data.FirestoreProvider
 import com.example.data.Invoice
+import com.example.data.NetworkMonitor
 import com.example.data.PrinterConfig
 import com.example.data.PrinterPreferences
 import com.example.data.ShopProfile
 import com.example.data.authStateFlow
 import com.example.ui.BillingViewModel
 import com.example.ui.UiState
+import com.example.ui.components.AccountSyncStatusDialog
+import com.example.ui.components.OfflineSyncBanner
 import com.example.ui.components.PdfPreviewDialog
 import com.example.ui.components.WarrantyNotificationsDialog
 import com.example.ui.screens.AuthScreen
@@ -90,7 +99,6 @@ import com.example.ui.theme.NarendraBillingTheme
 import com.google.firebase.Firebase
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.auth
-import com.google.firebase.firestore.FirebaseFirestore
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.io.File
@@ -127,26 +135,33 @@ fun AppNavigation(auth: FirebaseAuth = Firebase.auth) {
         AuthScreen(onAuthSuccess = {})
     } else {
         key(user.uid) {
-            BillingAppShell(currentUserId = user.uid)
+            BillingAppShell(currentUserId = user.uid, currentUserEmail = user.email)
         }
     }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun BillingAppShell(currentUserId: String) {
+fun BillingAppShell(currentUserId: String, currentUserEmail: String? = null) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
+
+    val isOnline by NetworkMonitor.observeConnectivity(context)
+        .collectAsStateWithLifecycle(initialValue = NetworkMonitor.isOnline(context))
+    val currentIsOnline by rememberUpdatedState(isOnline)
 
     val viewModel: BillingViewModel = viewModel(
         key = currentUserId,
         factory = viewModelFactory {
             initializer {
                 val app = checkNotNull(this[APPLICATION_KEY])
-                val databaseId = app.getString(R.string.firestore_database_id)
-                val db = FirebaseFirestore.getInstance(databaseId)
-                BillingViewModel(BillingRepository(db), currentUserId)
+                val db = FirestoreProvider.getDatabase(app)
+                BillingViewModel(
+                    repository = BillingRepository(db),
+                    currentUserId = currentUserId,
+                    isOnlineProvider = { currentIsOnline }
+                )
             }
         }
     )
@@ -158,6 +173,8 @@ fun BillingAppShell(currentUserId: String) {
     val productsState by viewModel.productsState.collectAsStateWithLifecycle()
     val customersState by viewModel.customersState.collectAsStateWithLifecycle()
     val invoicesState by viewModel.invoicesState.collectAsStateWithLifecycle()
+    val pendingSyncCount by viewModel.pendingSyncCount.collectAsStateWithLifecycle()
+    val isSyncing by viewModel.isSyncing.collectAsStateWithLifecycle()
     val draftBill by viewModel.draftBill.collectAsStateWithLifecycle()
     val lastCreatedInvoice by viewModel.lastCreatedInvoice.collectAsStateWithLifecycle()
     val statusMessage by viewModel.statusMessage.collectAsStateWithLifecycle()
@@ -165,11 +182,13 @@ fun BillingAppShell(currentUserId: String) {
     var currentTab by rememberSaveable { mutableStateOf(BillingTab.NEW_BILL) }
     var previewTarget by remember { mutableStateOf<Pair<Invoice, File>?>(null) }
     var showWarrantyNotifications by remember { mutableStateOf(false) }
+    var showSyncStatusDialog by remember { mutableStateOf(false) }
     var nowMillis by remember { mutableLongStateOf(System.currentTimeMillis()) }
     var hasNotifPermission by remember {
         mutableStateOf(WarrantyNotificationHelper.hasNotificationPermission(context))
     }
     var promptedNotifPermission by rememberSaveable { mutableStateOf(false) }
+    var wasOnline by remember { mutableStateOf(isOnline) }
 
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
@@ -219,6 +238,15 @@ fun BillingAppShell(currentUserId: String) {
                 nowMillis = nowMillis
             )
         }
+    }
+
+    LaunchedEffect(isOnline, pendingSyncCount) {
+        if (isOnline && (!wasOnline || pendingSyncCount > 0)) {
+            if (pendingSyncCount > 0) {
+                viewModel.syncPendingChanges(showSuccessMessage = true)
+            }
+        }
+        wasOnline = isOnline
     }
 
     BackHandler(enabled = currentTab != BillingTab.NEW_BILL) {
@@ -317,6 +345,36 @@ fun BillingAppShell(currentUserId: String) {
                     },
                     actions = {
                         IconButton(
+                            onClick = { showSyncStatusDialog = true },
+                            modifier = Modifier
+                                .minimumInteractiveComponentSize()
+                                .testTag("sync_status_button")
+                        ) {
+                            BadgedBox(
+                                badge = {
+                                    if (pendingSyncCount > 0) {
+                                        Badge {
+                                            Text(pendingSyncCount.toString())
+                                        }
+                                    }
+                                }
+                            ) {
+                                Icon(
+                                    imageVector = when {
+                                        !isOnline -> Icons.Default.CloudOff
+                                        pendingSyncCount > 0 -> Icons.Default.CloudSync
+                                        else -> Icons.Default.CloudDone
+                                    },
+                                    contentDescription = if (isOnline) "Cloud account sync status" else "Offline mode",
+                                    tint = when {
+                                        !isOnline -> MaterialTheme.colorScheme.secondary
+                                        pendingSyncCount > 0 -> MaterialTheme.colorScheme.primary
+                                        else -> MaterialTheme.colorScheme.tertiary
+                                    }
+                                )
+                            }
+                        }
+                        IconButton(
                             onClick = { showWarrantyNotifications = true },
                             modifier = Modifier
                                 .minimumInteractiveComponentSize()
@@ -374,30 +432,47 @@ fun BillingAppShell(currentUserId: String) {
                 }
             }
         ) { innerPadding ->
-            Row(
+            Column(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(innerPadding)
             ) {
-                if (useRail) {
-                    NavigationRail {
-                        BillingTab.entries.forEach { tab ->
-                            NavigationRailItem(
-                                selected = currentTab == tab,
-                                onClick = { currentTab = tab },
-                                icon = { Icon(tab.icon, contentDescription = tab.label) },
-                                label = { Text(tab.label) },
-                                modifier = Modifier.testTag(tab.testTag)
-                            )
+                OfflineSyncBanner(
+                    isOnline = isOnline,
+                    pendingSyncCount = pendingSyncCount,
+                    isSyncing = isSyncing,
+                    onBannerClick = {
+                        if (isOnline && pendingSyncCount > 0) {
+                            viewModel.syncPendingChanges(showSuccessMessage = true)
+                        } else {
+                            showSyncStatusDialog = true
                         }
                     }
-                }
-
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.TopCenter
+                )
+                Row(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxSize()
                 ) {
-                    Box(modifier = Modifier.widthIn(max = 860.dp).fillMaxSize()) {
+                    if (useRail) {
+                        NavigationRail {
+                            BillingTab.entries.forEach { tab ->
+                                NavigationRailItem(
+                                    selected = currentTab == tab,
+                                    onClick = { currentTab = tab },
+                                    icon = { Icon(tab.icon, contentDescription = tab.label) },
+                                    label = { Text(tab.label) },
+                                    modifier = Modifier.testTag(tab.testTag)
+                                )
+                            }
+                        }
+                    }
+
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.TopCenter
+                    ) {
+                        Box(modifier = Modifier.widthIn(max = 860.dp).fillMaxSize()) {
                         when (currentTab) {
                             BillingTab.NEW_BILL -> CreateBillScreen(
                                 viewModel = viewModel,
@@ -462,6 +537,7 @@ fun BillingAppShell(currentUserId: String) {
                     }
                 }
             }
+            }
         }
     }
 
@@ -485,6 +561,17 @@ fun BillingAppShell(currentUserId: String) {
             onDismiss = { showWarrantyNotifications = false },
             onPreviewPdf = ::launchPdfPreview,
             onGoToBills = { currentTab = BillingTab.BILLS }
+        )
+    }
+
+    if (showSyncStatusDialog) {
+        AccountSyncStatusDialog(
+            userEmail = currentUserEmail,
+            isOnline = isOnline,
+            pendingSyncCount = pendingSyncCount,
+            isSyncing = isSyncing,
+            onSyncNow = { viewModel.syncPendingChanges(showSuccessMessage = true) },
+            onDismiss = { showSyncStatusDialog = false }
         )
     }
 }

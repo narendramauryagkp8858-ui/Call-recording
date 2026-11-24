@@ -21,6 +21,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AddShoppingCart
+import androidx.compose.material.icons.filled.AutoFixHigh
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DeleteOutline
@@ -32,9 +33,11 @@ import androidx.compose.material.icons.filled.Print
 import androidx.compose.material.icons.filled.Receipt
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Smartphone
 import androidx.compose.material.icons.filled.Storefront
 import androidx.compose.material.icons.filled.Verified
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -66,6 +69,8 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.billing.GstCalculator
+import com.example.billing.HsnAutoFillHelper
+import com.example.billing.MobileImeiHelper
 import com.example.billing.StockManager
 import com.example.billing.StockStatus
 import com.example.billing.WarrantyEvaluation
@@ -123,6 +128,7 @@ fun CreateBillScreen(
     var showProductPicker by remember { mutableStateOf(false) }
     var showCustomItemDialog by remember { mutableStateOf(false) }
     var editingLine by remember { mutableStateOf<DraftBillLine?>(null) }
+    var expandedImeiLineIds by remember { mutableStateOf(setOf<String>()) }
 
     val selectedSavedCustomer = remember(customers, draft.selectedCustomerId) {
         if (draft.selectedCustomerId.isBlank()) null
@@ -533,6 +539,66 @@ fun CreateBillScreen(
                             }
                         }
 
+                        val isLikelyPhone = MobileImeiHelper.isLikelyMobilePhone(line.name, line.hsnCode)
+                        val showImeiBox = isLikelyPhone ||
+                            line.imeiNumber.isNotBlank() ||
+                            expandedImeiLineIds.contains(line.localId)
+
+                        if (showImeiBox) {
+                            Surface(
+                                color = MaterialTheme.colorScheme.surfaceContainerLow,
+                                shape = MaterialTheme.shapes.small,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(8.dp),
+                                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                        ) {
+                                            Icon(
+                                                Icons.Default.Smartphone,
+                                                contentDescription = null,
+                                                tint = MaterialTheme.colorScheme.primary,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                            Text(
+                                                text = if (isLikelyPhone) "Mobile Phone IMEI" else "IMEI / Serial No.",
+                                                style = MaterialTheme.typography.labelMedium,
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = MaterialTheme.colorScheme.primary
+                                            )
+                                        }
+                                        if (MobileImeiHelper.hasStandard15DigitImei(line.imeiNumber)) {
+                                            Text(
+                                                text = "15-digit IMEI ✓",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                fontWeight = FontWeight.Bold,
+                                                color = MaterialTheme.colorScheme.tertiary
+                                            )
+                                        }
+                                    }
+                                    OutlinedTextField(
+                                        value = line.imeiNumber,
+                                        onValueChange = { viewModel.updateLineImei(line.localId, it) },
+                                        label = { Text("Enter IMEI 1 / IMEI 2") },
+                                        placeholder = { Text("e.g. 352099001761481 / 352099001761482") },
+                                        singleLine = true,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .testTag("line_imei_input_${line.localId}")
+                                    )
+                                }
+                            }
+                        }
+
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -564,6 +630,25 @@ fun CreateBillScreen(
                                         ) {
                                             Icon(Icons.Default.Add, contentDescription = "Increase quantity", modifier = Modifier.size(18.dp))
                                         }
+                                    }
+                                }
+                                if (!showImeiBox) {
+                                    TextButton(
+                                        onClick = {
+                                            expandedImeiLineIds = expandedImeiLineIds + line.localId
+                                        },
+                                        modifier = Modifier
+                                            .heightIn(min = 48.dp)
+                                            .testTag("add_imei_button_${line.localId}"),
+                                        contentPadding = PaddingValues(horizontal = 8.dp)
+                                    ) {
+                                        Icon(
+                                            Icons.Default.Smartphone,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                        Spacer(Modifier.width(4.dp))
+                                        Text("Add IMEI", style = MaterialTheme.typography.labelMedium)
                                     }
                                 }
                             }
@@ -828,7 +913,7 @@ fun CreateBillScreen(
         BillLineEditDialog(
             initial = null,
             onDismiss = { showCustomItemDialog = false },
-            onSave = { name, qty, sellRate, gstRate, taxInclusive, unit, hsn ->
+            onSave = { name, qty, sellRate, gstRate, taxInclusive, unit, hsn, imei ->
                 viewModel.addCustomLineToBill(
                     DraftBillLine(
                         name = name,
@@ -838,7 +923,8 @@ fun CreateBillScreen(
                         sellingRate = sellRate,
                         purchaseRate = 0.0,
                         gstRate = gstRate,
-                        taxInclusive = taxInclusive
+                        taxInclusive = taxInclusive,
+                        imeiNumber = imei
                     )
                 )
                 showCustomItemDialog = false
@@ -850,7 +936,7 @@ fun CreateBillScreen(
         BillLineEditDialog(
             initial = target,
             onDismiss = { editingLine = null },
-            onSave = { name, qty, sellRate, gstRate, taxInclusive, unit, hsn ->
+            onSave = { name, qty, sellRate, gstRate, taxInclusive, unit, hsn, imei ->
                 viewModel.updateLineDetails(
                     localId = target.localId,
                     name = name,
@@ -859,7 +945,8 @@ fun CreateBillScreen(
                     gstRate = gstRate,
                     taxInclusive = taxInclusive,
                     unit = unit,
-                    hsnCode = hsn
+                    hsnCode = hsn,
+                    imeiNumber = imei
                 )
                 editingLine = null
             }
@@ -878,6 +965,15 @@ fun CreateBillScreen(
                         style = MaterialTheme.typography.titleMedium,
                         color = MaterialTheme.colorScheme.primary
                     )
+                    val imeiLines = lastCreatedInvoice.items.filter { it.imeiNumber.isNotBlank() }
+                    if (imeiLines.isNotEmpty()) {
+                        imeiLines.take(2).forEach { imeiItem ->
+                            MonoCodeText(
+                                text = "IMEI (${imeiItem.name}): ${imeiItem.imeiNumber}",
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
                     if (WarrantyManager.isWarrantyActiveOnBill(lastCreatedInvoice)) {
                         val wEval = WarrantyManager.evaluate(lastCreatedInvoice)
                         Text(
@@ -1194,14 +1290,19 @@ private fun ProductPickerDialog(
 private fun BillLineEditDialog(
     initial: DraftBillLine?,
     onDismiss: () -> Unit,
-    onSave: (String, Double, Double, Double, Boolean, String, String) -> Unit
+    onSave: (String, Double, Double, Double, Boolean, String, String, String) -> Unit
 ) {
+    val (initImei1, initImei2) = remember(initial) {
+        MobileImeiHelper.splitImeiNumbers(initial?.imeiNumber.orEmpty())
+    }
     var name by remember { mutableStateOf(initial?.name ?: "") }
     var qty by remember { mutableStateOf(initial?.let { GstCalculator.formatPlainNumber(it.quantity) } ?: "1") }
     var rate by remember { mutableStateOf(initial?.let { GstCalculator.formatPlainNumber(it.sellingRate) } ?: "") }
     var gst by remember { mutableStateOf(initial?.let { GstCalculator.formatPlainNumber(it.gstRate) } ?: "18") }
     var unit by remember { mutableStateOf(initial?.unit ?: "PCS") }
     var hsn by remember { mutableStateOf(initial?.hsnCode ?: "") }
+    var imei1 by remember { mutableStateOf(initImei1) }
+    var imei2 by remember { mutableStateOf(initImei2) }
     var inclusive by remember { mutableStateOf(initial?.taxInclusive ?: false) }
 
     AlertDialog(
@@ -1258,6 +1359,47 @@ private fun BillLineEditDialog(
                         modifier = Modifier.weight(1f)
                     )
                 }
+                val hsnSuggestion = remember(name) { HsnAutoFillHelper.suggestHsn(name) }
+                if (hsnSuggestion != null && hsn.trim().uppercase() != hsnSuggestion.hsnCode) {
+                    AssistChip(
+                        onClick = {
+                            hsn = hsnSuggestion.hsnCode
+                            if (initial == null) {
+                                gst = GstCalculator.formatPlainNumber(hsnSuggestion.gstRate)
+                            }
+                        },
+                        leadingIcon = {
+                            Icon(Icons.Default.AutoFixHigh, contentDescription = null, modifier = Modifier.size(16.dp))
+                        },
+                        label = {
+                            Text(
+                                "Auto HSN: ${hsnSuggestion.hsnCode} (${hsnSuggestion.category})",
+                                style = MaterialTheme.typography.labelSmall
+                            )
+                        },
+                        modifier = Modifier.testTag("bill_line_hsn_suggest_chip")
+                    )
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = imei1,
+                        onValueChange = { imei1 = MobileImeiHelper.normalizeImeiInput(it) },
+                        label = { Text("IMEI 1 (Phone)") },
+                        singleLine = true,
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("dialog_imei1_input")
+                    )
+                    OutlinedTextField(
+                        value = imei2,
+                        onValueChange = { imei2 = MobileImeiHelper.normalizeImeiInput(it) },
+                        label = { Text("IMEI 2 (Optional)") },
+                        singleLine = true,
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("dialog_imei2_input")
+                    )
+                }
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -1275,7 +1417,8 @@ private fun BillLineEditDialog(
                     val r = rate.toDoubleOrNull() ?: 0.0
                     val g = gst.toDoubleOrNull() ?: 0.0
                     if (name.isNotBlank() && q > 0.0 && r >= 0.0) {
-                        onSave(name, q, r, g, inclusive, unit, hsn)
+                        val combinedImei = MobileImeiHelper.combineImeiNumbers(imei1, imei2)
+                        onSave(name, q, r, g, inclusive, unit, hsn, combinedImei)
                     }
                 },
                 enabled = name.isNotBlank() && (rate.toDoubleOrNull() ?: -1.0) >= 0.0

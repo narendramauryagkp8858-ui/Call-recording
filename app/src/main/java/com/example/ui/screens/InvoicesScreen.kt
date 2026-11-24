@@ -61,6 +61,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.billing.EditedInvoiceLine
 import com.example.billing.GstCalculator
+import com.example.billing.MobileImeiHelper
 import com.example.billing.StockManager
 import com.example.billing.WarrantyEvaluation
 import com.example.billing.WarrantyManager
@@ -189,7 +190,7 @@ fun InvoicesScreen(
                     OutlinedTextField(
                         value = searchQuery,
                         onValueChange = { searchQuery = it },
-                        label = { Text("Search bill no., customer, mobile or shop") },
+                        label = { Text("Search bill no., customer, mobile, IMEI or shop") },
                         leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
                         singleLine = true,
                         modifier = Modifier
@@ -204,7 +205,8 @@ fun InvoicesScreen(
                         inv.invoiceNumber.contains(searchQuery, true) ||
                             inv.customerName.contains(searchQuery, true) ||
                             inv.customerPhone.contains(searchQuery, true) ||
-                            inv.shopName.contains(searchQuery, true)
+                            inv.shopName.contains(searchQuery, true) ||
+                            inv.items.any { it.imeiNumber.contains(searchQuery, true) }
                     }
                 }
 
@@ -281,6 +283,15 @@ fun InvoicesScreen(
                                         maxLines = 2,
                                         overflow = TextOverflow.Ellipsis
                                     )
+                                    val imeiSummary = inv.items.filter { it.imeiNumber.isNotBlank() }
+                                    if (imeiSummary.isNotEmpty()) {
+                                        MonoCodeText(
+                                            text = imeiSummary.take(2).joinToString(" • ") { item ->
+                                                "IMEI (${item.name}): ${item.imeiNumber}"
+                                            },
+                                            color = MaterialTheme.colorScheme.primary
+                                        )
+                                    }
                                 }
 
                                 val warrantyEval = WarrantyManager.evaluate(inv, nowMillis)
@@ -571,7 +582,8 @@ private fun EditInvoiceReturnDialog(
                     quantity = item.quantity,
                     sellingRate = item.sellingRate,
                     gstRate = item.gstRate,
-                    taxInclusive = item.taxInclusive
+                    taxInclusive = item.taxInclusive,
+                    imeiNumber = item.imeiNumber
                 )
             }
         )
@@ -700,12 +712,30 @@ private fun EditInvoiceReturnDialog(
                                         if (line.quantity > 0.0) {
                                             GstCalculator.computeLine(
                                                 line.productId, line.name, line.hsnCode, line.unit,
-                                                line.quantity, line.sellingRate, 0.0, line.gstRate, line.taxInclusive
+                                                line.quantity, line.sellingRate, 0.0, line.gstRate, line.taxInclusive,
+                                                line.imeiNumber
                                             ).lineItem.lineTotal
                                         } else 0.0
                                     ),
                                     style = MaterialTheme.typography.titleSmall,
                                     color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+
+                            if (MobileImeiHelper.isLikelyMobilePhone(line.name, line.hsnCode) || line.imeiNumber.isNotBlank()) {
+                                OutlinedTextField(
+                                    value = line.imeiNumber,
+                                    onValueChange = { raw ->
+                                        val clean = MobileImeiHelper.normalizeImeiInput(raw)
+                                        lines = lines.map { item ->
+                                            if (item.key == line.key) item.copy(imeiNumber = clean) else item
+                                        }
+                                    },
+                                    label = { Text("IMEI / Serial No.") },
+                                    singleLine = true,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("edit_return_imei_${line.key}")
                                 )
                             }
 

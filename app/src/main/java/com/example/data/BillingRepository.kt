@@ -1,25 +1,32 @@
 package com.example.data
 
 import android.content.Context
-import com.example.R
+import android.util.Log
 import com.example.billing.StockManager
 import com.example.billing.StockStatus
+import com.google.android.gms.tasks.Task
 import com.google.firebase.Firebase
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.auth
+import com.google.firebase.firestore.DocumentReference
 import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.FirebaseFirestoreException
+import com.google.firebase.firestore.MetadataChanges
 import com.google.firebase.firestore.Query
+import com.google.firebase.firestore.Source
 import com.google.firebase.firestore.snapshots
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.tasks.await
+import kotlinx.coroutines.withTimeoutOrNull
 
 data class StockChangeNotice(
     val productId: String,
@@ -33,23 +40,32 @@ data class StockChangeNotice(
 
 data class InvoiceCreateResult(
     val invoice: Invoice,
-    val stockChanges: List<StockChangeNotice> = emptyList()
+    val stockChanges: List<StockChangeNotice> = emptyList(),
+    val queuedOffline: Boolean = false
 )
 
 data class InvoiceUpdateResult(
     val invoice: Invoice,
-    val stockChanges: List<StockChangeNotice> = emptyList()
+    val stockChanges: List<StockChangeNotice> = emptyList(),
+    val queuedOffline: Boolean = false
+)
+
+data class ProductHsnUpdateEntry(
+    val productId: String,
+    val hsnCode: String,
+    val gstRate: Double? = null
 )
 
 class BillingRepository(
     private val db: FirebaseFirestore,
     private val auth: FirebaseAuth = Firebase.auth
 ) {
-    constructor(context: Context) : this(
-        FirebaseFirestore.getInstance(
-            context.applicationContext.getString(R.string.firestore_database_id)
-        )
-    )
+    constructor(context: Context) : this(FirestoreProvider.getDatabase(context))
+
+    private val _pendingWritesByCollection = MutableStateFlow<Map<String, Int>>(emptyMap())
+    val pendingSyncCount: Flow<Int> = _pendingWritesByCollection.map { counts ->
+        counts.values.sum()
+    }
 
     private fun requireUserId(): String {
         return auth.currentUser?.uid
@@ -57,6 +73,95 @@ class BillingRepository(
     }
 
     private fun userRoot(uid: String) = db.collection("users").document(uid)
+
+    private fun isNetworkOrOfflineException(t: Throwable): Boolean {
+        val fsEx = generateSequence(t) { it.cause }
+            .filterIsInstance<FirebaseFirestoreException>()
+            .firstOrNull()
+        if (fsEx != null) {
+            return when (fsEx.code) {
+                FirebaseFirestoreException.Code.UNAVAILABLE,
+                FirebaseFirestoreException.Code.DEADLINE_EXCEEDED,
+                FirebaseFirestoreException.Code.ABORTED -> true
+                else -> false
+            }
+        }
+        val msg = t.message?.lowercase().orEmpty()
+        return msg.contains("offline") || msg.contains("unavailable") || msg.contains("network")
+    }
+
+    /**
+     * Executes a Firestore write task with offline-first support:
+     * - Returns true if confirmed by cloud backend right now.
+     * - Returns false if persisted in local disk cache/queue (offline or slow network),
+     *   so the app remains responsive offline and syncs automatically when online.
+     * - Rethrows real errors (e.g. PERMISSION_DENIED, INVALID_ARGUMENT).
+     */
+    private suspend fun awaitTaskOfflineAware(
+        task: Task<*>,
+        isOnline: Boolean,
+        opType: OperationType,
+        docPath: String
+    ): Boolean {
+        if (!isOnline) {
+            withTimeoutOrNull(OFFLINE_QUEUE_SETTLE_MS) {
+                try {
+                    task.await()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                }
+            }
+            if (task.isComplete && !task.isSuccessful) {
+                val ex = task.exception
+                if (ex != null && !isNetworkOrOfflineException(ex)) {
+                    throw ex
+                }
+            }
+            return false
+        }
+
+        return try {
+            val syncedNow = withTimeoutOrNull(ONLINE_ACK_TIMEOUT_MS) {
+                task.await()
+                true
+            }
+            syncedNow == true
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            if (isNetworkOrOfflineException(e)) {
+                Log.w(TAG, "Write queued offline for $docPath ($opType): ${e.message}")
+                false
+            } else {
+                throw e
+            }
+        }
+    }
+
+    private suspend fun readDocumentCacheFirst(
+        docRef: DocumentReference,
+        isOnline: Boolean
+    ): DocumentSnapshot? {
+        val cached = try {
+            docRef.get(Source.CACHE).await()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            null
+        }
+        if (cached != null && cached.exists()) return cached
+        if (!isOnline) return null
+        return try {
+            withTimeoutOrNull(ONLINE_ACK_TIMEOUT_MS) {
+                docRef.get().await()
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            null
+        }
+    }
 
     private fun <T> observeCollection(
         uid: String,
@@ -74,8 +179,15 @@ class BillingRepository(
         emitAll(
             userRoot(uid).collection(collectionName)
                 .orderBy(orderField, direction)
-                .snapshots()
-                .map { snapshot -> mapper(snapshot.documents) }
+                .snapshots(MetadataChanges.INCLUDE)
+                .map { snapshot ->
+                    val pendingDocs = snapshot.documents.count { it.metadata.hasPendingWrites() }
+                    _pendingWritesByCollection.update { prev ->
+                        if (prev[collectionName] == pendingDocs) prev
+                        else prev + (collectionName to pendingDocs)
+                    }
+                    mapper(snapshot.documents)
+                }
                 .catch { error ->
                     val firestoreError = generateSequence(error) { it.cause }
                         .filterIsInstance<FirebaseFirestoreException>()
@@ -110,7 +222,32 @@ class BillingRepository(
             docs.mapNotNull { it.toObject(Invoice::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE) }
         }
 
-    suspend fun saveShop(shop: ShopProfile, existingShops: List<ShopProfile>): Result<String> {
+    suspend fun syncPendingWritesNow(): Result<Unit> {
+        return try {
+            requireUserId()
+            db.enableNetwork().await()
+            val synced = withTimeoutOrNull(SYNC_WAIT_TIMEOUT_MS) {
+                db.waitForPendingWrites().await()
+                true
+            }
+            if (synced == true) {
+                Result.success(Unit)
+            } else {
+                Result.failure(IllegalStateException("Still syncing with cloud... check internet connection."))
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "Sync pending writes failed: ${e.message}")
+            Result.failure(e)
+        }
+    }
+
+    suspend fun saveShop(
+        shop: ShopProfile,
+        existingShops: List<ShopProfile>,
+        isOnline: Boolean = true
+    ): Result<String> {
         var docPath = "users/${auth.currentUser?.uid ?: "unauth"}/shops"
         return try {
             val uid = requireUserId()
@@ -134,7 +271,12 @@ class BillingRepository(
             } else {
                 batch.update(docRef, shop.toUpdateMap())
             }
-            batch.commit().await()
+            awaitTaskOfflineAware(
+                task = batch.commit(),
+                isOnline = isOnline,
+                opType = if (isNew) OperationType.CREATE else OperationType.UPDATE,
+                docPath = docPath
+            )
             Result.success(docRef.id)
         } catch (e: CancellationException) {
             throw e
@@ -144,14 +286,14 @@ class BillingRepository(
         }
     }
 
-    suspend fun deleteShop(shopId: String): Result<Unit> {
+    suspend fun deleteShop(shopId: String, isOnline: Boolean = true): Result<Unit> {
         var docPath = "users/${auth.currentUser?.uid ?: "unauth"}/shops/$shopId"
         return try {
             val uid = requireUserId()
             require(shopId.isNotBlank()) { "Invalid shop ID." }
             val docRef = userRoot(uid).collection("shops").document(shopId)
             docPath = docRef.path
-            docRef.delete().await()
+            awaitTaskOfflineAware(docRef.delete(), isOnline, OperationType.DELETE, docPath)
             Result.success(Unit)
         } catch (e: CancellationException) {
             throw e
@@ -161,7 +303,7 @@ class BillingRepository(
         }
     }
 
-    suspend fun saveProduct(product: ProductItem): Result<String> {
+    suspend fun saveProduct(product: ProductItem, isOnline: Boolean = true): Result<String> {
         var docPath = "users/${auth.currentUser?.uid ?: "unauth"}/products"
         return try {
             val uid = requireUserId()
@@ -171,11 +313,17 @@ class BillingRepository(
             val isNew = product.id.isBlank()
             val docRef = if (isNew) collection.document() else collection.document(product.id)
             docPath = docRef.path
-            if (isNew) {
-                docRef.set(product.toCreateMap()).await()
+            val task = if (isNew) {
+                docRef.set(product.toCreateMap())
             } else {
-                docRef.update(product.toUpdateMap()).await()
+                docRef.update(product.toUpdateMap())
             }
+            awaitTaskOfflineAware(
+                task = task,
+                isOnline = isOnline,
+                opType = if (isNew) OperationType.CREATE else OperationType.UPDATE,
+                docPath = docPath
+            )
             Result.success(docRef.id)
         } catch (e: CancellationException) {
             throw e
@@ -185,14 +333,64 @@ class BillingRepository(
         }
     }
 
-    suspend fun deleteProduct(productId: String): Result<Unit> {
+    suspend fun bulkUpdateProductHsn(
+        updates: List<ProductHsnUpdateEntry>,
+        isOnline: Boolean = true
+    ): Result<Int> {
+        val cleanUpdates = updates
+            .mapNotNull { entry ->
+                val cleanId = entry.productId.trim()
+                val cleanHsn = entry.hsnCode.trim().uppercase().take(20)
+                if (cleanId.isBlank() || cleanHsn.isBlank()) null
+                else entry.copy(productId = cleanId, hsnCode = cleanHsn)
+            }
+            .distinctBy { it.productId }
+        if (cleanUpdates.isEmpty()) return Result.success(0)
+
+        var docPath = "users/${auth.currentUser?.uid ?: "unauth"}/products/${cleanUpdates.first().productId}"
+        return try {
+            val uid = requireUserId()
+            val productsCol = userRoot(uid).collection("products")
+            var updatedCount = 0
+            cleanUpdates.chunked(400).forEach { chunk ->
+                val batch = db.batch()
+                chunk.forEach { item ->
+                    val ref = productsCol.document(item.productId)
+                    docPath = ref.path
+                    val fields = mutableMapOf<String, Any>(
+                        "hsnCode" to item.hsnCode,
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                    item.gstRate?.let { rate ->
+                        fields["gstRate"] = rate.coerceIn(0.0, 100.0)
+                    }
+                    batch.update(ref, fields)
+                    updatedCount += 1
+                }
+                awaitTaskOfflineAware(
+                    task = batch.commit(),
+                    isOnline = isOnline,
+                    opType = OperationType.UPDATE,
+                    docPath = docPath
+                )
+            }
+            Result.success(updatedCount)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, docPath)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun deleteProduct(productId: String, isOnline: Boolean = true): Result<Unit> {
         var docPath = "users/${auth.currentUser?.uid ?: "unauth"}/products/$productId"
         return try {
             val uid = requireUserId()
             require(productId.isNotBlank()) { "Invalid product ID." }
             val docRef = userRoot(uid).collection("products").document(productId)
             docPath = docRef.path
-            docRef.delete().await()
+            awaitTaskOfflineAware(docRef.delete(), isOnline, OperationType.DELETE, docPath)
             Result.success(Unit)
         } catch (e: CancellationException) {
             throw e
@@ -202,7 +400,12 @@ class BillingRepository(
         }
     }
 
-    suspend fun adjustProductStock(productId: String, delta: Double): Result<Double> {
+    suspend fun adjustProductStock(
+        productId: String,
+        delta: Double,
+        cachedStockQty: Double? = null,
+        isOnline: Boolean = true
+    ): Result<Double> {
         var docPath = "users/${auth.currentUser?.uid ?: "unauth"}/products/$productId"
         return try {
             val uid = requireUserId()
@@ -210,21 +413,21 @@ class BillingRepository(
             val docRef = userRoot(uid).collection("products").document(productId)
             docPath = docRef.path
 
-            val newStock = db.runTransaction { transaction ->
-                val snap = transaction.get(docRef)
+            val currentStock = cachedStockQty ?: run {
+                val snap = readDocumentCacheFirst(docRef, isOnline)
+                    ?: throw IllegalStateException("Item no longer exists.")
                 if (!snap.exists()) throw IllegalStateException("Item no longer exists.")
-                val currentStock = (snap.get("stockQty") as? Number)?.toDouble() ?: 0.0
-                val updatedStock = StockManager.computeUpdatedStockQty(currentStock, delta)
-                transaction.update(
-                    docRef,
-                    mapOf(
-                        "stockQty" to updatedStock,
-                        "updatedAt" to FieldValue.serverTimestamp()
-                    )
+                (snap.get("stockQty") as? Number)?.toDouble() ?: 0.0
+            }
+            val updatedStock = StockManager.computeUpdatedStockQty(currentStock, delta)
+            val task = docRef.update(
+                mapOf(
+                    "stockQty" to updatedStock,
+                    "updatedAt" to FieldValue.serverTimestamp()
                 )
-                updatedStock
-            }.await()
-            Result.success(newStock)
+            )
+            awaitTaskOfflineAware(task, isOnline, OperationType.UPDATE, docPath)
+            Result.success(updatedStock)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -233,7 +436,7 @@ class BillingRepository(
         }
     }
 
-    suspend fun saveCustomer(customer: Customer): Result<String> {
+    suspend fun saveCustomer(customer: Customer, isOnline: Boolean = true): Result<String> {
         var docPath = "users/${auth.currentUser?.uid ?: "unauth"}/customers"
         return try {
             val uid = requireUserId()
@@ -242,11 +445,17 @@ class BillingRepository(
             val isNew = customer.id.isBlank()
             val docRef = if (isNew) collection.document() else collection.document(customer.id)
             docPath = docRef.path
-            if (isNew) {
-                docRef.set(customer.toCreateMap()).await()
+            val task = if (isNew) {
+                docRef.set(customer.toCreateMap())
             } else {
-                docRef.update(customer.toUpdateMap()).await()
+                docRef.update(customer.toUpdateMap())
             }
+            awaitTaskOfflineAware(
+                task = task,
+                isOnline = isOnline,
+                opType = if (isNew) OperationType.CREATE else OperationType.UPDATE,
+                docPath = docPath
+            )
             Result.success(docRef.id)
         } catch (e: CancellationException) {
             throw e
@@ -256,14 +465,14 @@ class BillingRepository(
         }
     }
 
-    suspend fun deleteCustomer(customerId: String): Result<Unit> {
+    suspend fun deleteCustomer(customerId: String, isOnline: Boolean = true): Result<Unit> {
         var docPath = "users/${auth.currentUser?.uid ?: "unauth"}/customers/$customerId"
         return try {
             val uid = requireUserId()
             require(customerId.isNotBlank()) { "Invalid customer ID." }
             val docRef = userRoot(uid).collection("customers").document(customerId)
             docPath = docRef.path
-            docRef.delete().await()
+            awaitTaskOfflineAware(docRef.delete(), isOnline, OperationType.DELETE, docPath)
             Result.success(Unit)
         } catch (e: CancellationException) {
             throw e
@@ -276,7 +485,9 @@ class BillingRepository(
     suspend fun createInvoice(
         invoice: Invoice,
         shop: ShopProfile,
-        newCustomerIfRequested: Customer? = null
+        newCustomerIfRequested: Customer? = null,
+        cachedProductsById: Map<String, ProductItem> = emptyMap(),
+        isOnline: Boolean = true
     ): Result<InvoiceCreateResult> {
         var docPath = "users/${auth.currentUser?.uid ?: "unauth"}/invoices"
         return try {
@@ -291,8 +502,16 @@ class BillingRepository(
             docPath = invoiceRef.path
 
             val stockDeltas = StockManager.computeStockDeltasForCreate(invoice.items)
-            val productRefs = stockDeltas.keys.associateWith { pid ->
-                root.collection("products").document(pid)
+            val resolvedProducts = mutableMapOf<String, ProductItem>()
+            for (pid in stockDeltas.keys) {
+                val cached = cachedProductsById[pid]
+                if (cached != null) {
+                    resolvedProducts[pid] = cached
+                } else {
+                    val snap = readDocumentCacheFirst(root.collection("products").document(pid), isOnline)
+                    val obj = snap?.toObject(ProductItem::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+                    if (obj != null) resolvedProducts[pid] = obj
+                }
             }
 
             var finalCustomerId = invoice.customerId
@@ -305,63 +524,56 @@ class BillingRepository(
                 customerId = finalCustomerId
             )
 
-            val stockNotices = db.runTransaction { transaction ->
-                // Phase 1: All Firestore reads BEFORE any writes
-                val productSnapshots = productRefs.mapValues { (_, ref) ->
-                    transaction.get(ref)
-                }
+            val batch = db.batch()
+            if (custRef != null && newCustomerIfRequested != null) {
+                batch.set(custRef, newCustomerIfRequested.toCreateMap())
+            }
+            batch.set(invoiceRef, savedInvoice.toCreateMap())
 
-                // Phase 2: All Firestore writes
-                if (custRef != null && newCustomerIfRequested != null) {
-                    transaction.set(custRef, newCustomerIfRequested.toCreateMap())
-                }
-                transaction.set(invoiceRef, savedInvoice.toCreateMap())
-
-                if (shop.id.isNotBlank()) {
-                    val shopRef = root.collection("shops").document(shop.id)
-                    transaction.update(
-                        shopRef,
-                        mapOf(
-                            "nextInvoiceNumber" to (shop.nextInvoiceNumber + 1L).coerceAtMost(10_000_000L),
-                            "updatedAt" to FieldValue.serverTimestamp()
-                        )
+            if (shop.id.isNotBlank()) {
+                val shopRef = root.collection("shops").document(shop.id)
+                batch.update(
+                    shopRef,
+                    mapOf(
+                        "nextInvoiceNumber" to (shop.nextInvoiceNumber + 1L).coerceIn(1L, 10_000_000L),
+                        "updatedAt" to FieldValue.serverTimestamp()
                     )
-                }
+                )
+            }
 
-                val notices = mutableListOf<StockChangeNotice>()
-                productSnapshots.forEach { (pid, snap) ->
-                    if (snap.exists()) {
-                        val delta = stockDeltas[pid] ?: 0.0
-                        val currentStock = (snap.get("stockQty") as? Number)?.toDouble() ?: 0.0
-                        val threshold = (snap.get("lowStockThreshold") as? Number)?.toDouble()
-                            ?: StockManager.DEFAULT_LOW_STOCK_THRESHOLD
-                        val nextStock = StockManager.computeUpdatedStockQty(currentStock, delta)
-                        val name = snap.getString("name") ?: "Item"
-                        val unit = snap.getString("unit") ?: "PCS"
-                        transaction.update(
-                            snap.reference,
-                            mapOf(
-                                "stockQty" to nextStock,
-                                "updatedAt" to FieldValue.serverTimestamp()
-                            )
-                        )
-                        notices.add(
-                            StockChangeNotice(
-                                productId = pid,
-                                productName = name,
-                                unit = unit,
-                                previousStock = currentStock,
-                                newStock = nextStock,
-                                delta = delta,
-                                status = StockManager.getStockStatus(nextStock, threshold)
-                            )
-                        )
-                    }
-                }
-                notices
-            }.await()
+            val notices = mutableListOf<StockChangeNotice>()
+            resolvedProducts.forEach { (pid, prod) ->
+                val delta = stockDeltas[pid] ?: 0.0
+                val currentStock = prod.stockQty
+                val threshold = prod.lowStockThreshold
+                val nextStock = StockManager.computeUpdatedStockQty(currentStock, delta)
+                batch.update(
+                    root.collection("products").document(pid),
+                    mapOf(
+                        "stockQty" to nextStock,
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                )
+                notices.add(
+                    StockChangeNotice(
+                        productId = pid,
+                        productName = prod.name.ifBlank { "Item" },
+                        unit = prod.unit.ifBlank { "PCS" },
+                        previousStock = currentStock,
+                        newStock = nextStock,
+                        delta = delta,
+                        status = StockManager.getStockStatus(nextStock, threshold)
+                    )
+                )
+            }
 
-            Result.success(InvoiceCreateResult(savedInvoice, stockNotices))
+            val syncedNow = awaitTaskOfflineAware(
+                task = batch.commit(),
+                isOnline = isOnline,
+                opType = OperationType.CREATE,
+                docPath = docPath
+            )
+            Result.success(InvoiceCreateResult(savedInvoice, notices, queuedOffline = !syncedNow))
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -375,7 +587,8 @@ class BillingRepository(
         includeStamp: Boolean,
         includeSignature: Boolean,
         paymentMode: PaymentMode,
-        notes: String
+        notes: String,
+        isOnline: Boolean = true
     ): Result<Unit> {
         var docPath = "users/${auth.currentUser?.uid ?: "unauth"}/invoices/$invoiceId"
         return try {
@@ -383,7 +596,7 @@ class BillingRepository(
             require(invoiceId.isNotBlank()) { "Invalid invoice ID." }
             val docRef = userRoot(uid).collection("invoices").document(invoiceId)
             docPath = docRef.path
-            docRef.update(
+            val task = docRef.update(
                 mapOf(
                     "includeStamp" to includeStamp,
                     "includeSignature" to includeSignature,
@@ -391,7 +604,8 @@ class BillingRepository(
                     "notes" to notes.trim().take(300),
                     "updatedAt" to FieldValue.serverTimestamp()
                 )
-            ).await()
+            )
+            awaitTaskOfflineAware(task, isOnline, OperationType.UPDATE, docPath)
             Result.success(Unit)
         } catch (e: CancellationException) {
             throw e
@@ -405,7 +619,10 @@ class BillingRepository(
      * Automatically clears expired warranty metadata from bills without deleting or
      * altering any invoice items, customer info, stock, GST totals, or billing history.
      */
-    suspend fun clearExpiredWarrantiesBatch(invoiceIds: List<String>): Result<Int> {
+    suspend fun clearExpiredWarrantiesBatch(
+        invoiceIds: List<String>,
+        isOnline: Boolean = true
+    ): Result<Int> {
         val cleanIds = invoiceIds.filter { it.isNotBlank() }.distinct()
         if (cleanIds.isEmpty()) return Result.success(0)
         var docPath = "users/${auth.currentUser?.uid ?: "unauth"}/invoices/${cleanIds.first()}"
@@ -431,7 +648,7 @@ class BillingRepository(
                     )
                     cleared += 1
                 }
-                batch.commit().await()
+                awaitTaskOfflineAware(batch.commit(), isOnline, OperationType.UPDATE, docPath)
             }
             Result.success(cleared)
         } catch (e: CancellationException) {
@@ -442,7 +659,12 @@ class BillingRepository(
         }
     }
 
-    suspend fun updateInvoiceWithStockSync(updatedInvoice: Invoice): Result<InvoiceUpdateResult> {
+    suspend fun updateInvoiceWithStockSync(
+        updatedInvoice: Invoice,
+        existingInvoiceHint: Invoice? = null,
+        cachedProductsById: Map<String, ProductItem> = emptyMap(),
+        isOnline: Boolean = true
+    ): Result<InvoiceUpdateResult> {
         var docPath = "users/${auth.currentUser?.uid ?: "unauth"}/invoices/${updatedInvoice.id}"
         return try {
             val uid = requireUserId()
@@ -456,61 +678,66 @@ class BillingRepository(
             val invoiceRef = root.collection("invoices").document(updatedInvoice.id)
             docPath = invoiceRef.path
 
-            val notices = db.runTransaction { transaction ->
-                // Phase 1: Read existing invoice first, then all affected product documents
-                val invSnap = transaction.get(invoiceRef)
-                if (!invSnap.exists()) {
-                    throw IllegalStateException("Bill no longer exists.")
+            val existingInvoice = existingInvoiceHint ?: run {
+                val invSnap = readDocumentCacheFirst(invoiceRef, isOnline)
+                    ?: throw IllegalStateException("Bill no longer exists.")
+                if (!invSnap.exists()) throw IllegalStateException("Bill no longer exists.")
+                invSnap.toObject(Invoice::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+            }
+
+            val stockDeltas = StockManager.computeStockDeltasForUpdate(
+                oldItems = existingInvoice?.items.orEmpty(),
+                newItems = updatedInvoice.items
+            )
+
+            val resolvedProducts = mutableMapOf<String, ProductItem>()
+            for (pid in stockDeltas.keys) {
+                val cached = cachedProductsById[pid]
+                if (cached != null) {
+                    resolvedProducts[pid] = cached
+                } else {
+                    val snap = readDocumentCacheFirst(root.collection("products").document(pid), isOnline)
+                    val obj = snap?.toObject(ProductItem::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+                    if (obj != null) resolvedProducts[pid] = obj
                 }
-                val existingInvoice = invSnap.toObject(
-                    Invoice::class.java,
-                    DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
+            }
+
+            val batch = db.batch()
+            batch.update(invoiceRef, updatedInvoice.toEditUpdateMap())
+
+            val changes = mutableListOf<StockChangeNotice>()
+            resolvedProducts.forEach { (pid, prod) ->
+                val delta = stockDeltas[pid] ?: 0.0
+                val currentStock = prod.stockQty
+                val threshold = prod.lowStockThreshold
+                val nextStock = StockManager.computeUpdatedStockQty(currentStock, delta)
+                batch.update(
+                    root.collection("products").document(pid),
+                    mapOf(
+                        "stockQty" to nextStock,
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
                 )
-                val stockDeltas = StockManager.computeStockDeltasForUpdate(
-                    oldItems = existingInvoice?.items.orEmpty(),
-                    newItems = updatedInvoice.items
+                changes.add(
+                    StockChangeNotice(
+                        productId = pid,
+                        productName = prod.name.ifBlank { "Item" },
+                        unit = prod.unit.ifBlank { "PCS" },
+                        previousStock = currentStock,
+                        newStock = nextStock,
+                        delta = delta,
+                        status = StockManager.getStockStatus(nextStock, threshold)
+                    )
                 )
-                val productSnapshots = stockDeltas.keys.associateWith { pid ->
-                    transaction.get(root.collection("products").document(pid))
-                }
+            }
 
-                // Phase 2: All writes after reads
-                transaction.update(invoiceRef, updatedInvoice.toEditUpdateMap())
-
-                val changes = mutableListOf<StockChangeNotice>()
-                productSnapshots.forEach { (pid, snap) ->
-                    if (snap.exists()) {
-                        val delta = stockDeltas[pid] ?: 0.0
-                        val currentStock = (snap.get("stockQty") as? Number)?.toDouble() ?: 0.0
-                        val threshold = (snap.get("lowStockThreshold") as? Number)?.toDouble()
-                            ?: StockManager.DEFAULT_LOW_STOCK_THRESHOLD
-                        val nextStock = StockManager.computeUpdatedStockQty(currentStock, delta)
-                        val name = snap.getString("name") ?: "Item"
-                        val unit = snap.getString("unit") ?: "PCS"
-                        transaction.update(
-                            snap.reference,
-                            mapOf(
-                                "stockQty" to nextStock,
-                                "updatedAt" to FieldValue.serverTimestamp()
-                            )
-                        )
-                        changes.add(
-                            StockChangeNotice(
-                                productId = pid,
-                                productName = name,
-                                unit = unit,
-                                previousStock = currentStock,
-                                newStock = nextStock,
-                                delta = delta,
-                                status = StockManager.getStockStatus(nextStock, threshold)
-                            )
-                        )
-                    }
-                }
-                changes
-            }.await()
-
-            Result.success(InvoiceUpdateResult(updatedInvoice, notices))
+            val syncedNow = awaitTaskOfflineAware(
+                task = batch.commit(),
+                isOnline = isOnline,
+                opType = OperationType.UPDATE,
+                docPath = docPath
+            )
+            Result.success(InvoiceUpdateResult(updatedInvoice, changes, queuedOffline = !syncedNow))
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -519,7 +746,13 @@ class BillingRepository(
         }
     }
 
-    suspend fun deleteInvoice(invoiceId: String, restoreStock: Boolean = true): Result<List<StockChangeNotice>> {
+    suspend fun deleteInvoice(
+        invoiceId: String,
+        restoreStock: Boolean = true,
+        existingInvoiceHint: Invoice? = null,
+        cachedProductsById: Map<String, ProductItem> = emptyMap(),
+        isOnline: Boolean = true
+    ): Result<List<StockChangeNotice>> {
         var docPath = "users/${auth.currentUser?.uid ?: "unauth"}/invoices/$invoiceId"
         return try {
             val uid = requireUserId()
@@ -528,64 +761,76 @@ class BillingRepository(
             val invoiceRef = root.collection("invoices").document(invoiceId)
             docPath = invoiceRef.path
 
-            val notices = db.runTransaction { transaction ->
-                val invSnap = transaction.get(invoiceRef)
-                if (!invSnap.exists()) {
-                    throw IllegalStateException("Bill no longer exists.")
-                }
-                val existingInvoice = invSnap.toObject(
-                    Invoice::class.java,
-                    DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
-                )
-                val restoreQtys = if (restoreStock) {
-                    StockManager.aggregateProductQuantities(existingInvoice?.items.orEmpty())
+            val existingInvoice = existingInvoiceHint ?: run {
+                val invSnap = readDocumentCacheFirst(invoiceRef, isOnline)
+                invSnap?.toObject(Invoice::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+            }
+
+            val restoreQtys = if (restoreStock) {
+                StockManager.aggregateProductQuantities(existingInvoice?.items.orEmpty())
+            } else {
+                emptyMap()
+            }
+
+            val resolvedProducts = mutableMapOf<String, ProductItem>()
+            for (pid in restoreQtys.keys) {
+                val cached = cachedProductsById[pid]
+                if (cached != null) {
+                    resolvedProducts[pid] = cached
                 } else {
-                    emptyMap()
+                    val snap = readDocumentCacheFirst(root.collection("products").document(pid), isOnline)
+                    val obj = snap?.toObject(ProductItem::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+                    if (obj != null) resolvedProducts[pid] = obj
                 }
-                val productSnapshots = restoreQtys.keys.associateWith { pid ->
-                    transaction.get(root.collection("products").document(pid))
-                }
+            }
 
-                val changes = mutableListOf<StockChangeNotice>()
-                productSnapshots.forEach { (pid, snap) ->
-                    if (snap.exists()) {
-                        val addBackQty = restoreQtys[pid] ?: 0.0
-                        val currentStock = (snap.get("stockQty") as? Number)?.toDouble() ?: 0.0
-                        val threshold = (snap.get("lowStockThreshold") as? Number)?.toDouble()
-                            ?: StockManager.DEFAULT_LOW_STOCK_THRESHOLD
-                        val nextStock = StockManager.computeUpdatedStockQty(currentStock, addBackQty)
-                        val name = snap.getString("name") ?: "Item"
-                        val unit = snap.getString("unit") ?: "PCS"
-                        transaction.update(
-                            snap.reference,
-                            mapOf(
-                                "stockQty" to nextStock,
-                                "updatedAt" to FieldValue.serverTimestamp()
-                            )
-                        )
-                        changes.add(
-                            StockChangeNotice(
-                                productId = pid,
-                                productName = name,
-                                unit = unit,
-                                previousStock = currentStock,
-                                newStock = nextStock,
-                                delta = addBackQty,
-                                status = StockManager.getStockStatus(nextStock, threshold)
-                            )
-                        )
-                    }
-                }
-                transaction.delete(invoiceRef)
-                changes
-            }.await()
+            val batch = db.batch()
+            val changes = mutableListOf<StockChangeNotice>()
+            resolvedProducts.forEach { (pid, prod) ->
+                val addBackQty = restoreQtys[pid] ?: 0.0
+                val currentStock = prod.stockQty
+                val threshold = prod.lowStockThreshold
+                val nextStock = StockManager.computeUpdatedStockQty(currentStock, addBackQty)
+                batch.update(
+                    root.collection("products").document(pid),
+                    mapOf(
+                        "stockQty" to nextStock,
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                )
+                changes.add(
+                    StockChangeNotice(
+                        productId = pid,
+                        productName = prod.name.ifBlank { "Item" },
+                        unit = prod.unit.ifBlank { "PCS" },
+                        previousStock = currentStock,
+                        newStock = nextStock,
+                        delta = addBackQty,
+                        status = StockManager.getStockStatus(nextStock, threshold)
+                    )
+                )
+            }
+            batch.delete(invoiceRef)
 
-            Result.success(notices)
+            awaitTaskOfflineAware(
+                task = batch.commit(),
+                isOnline = isOnline,
+                opType = OperationType.DELETE,
+                docPath = docPath
+            )
+            Result.success(changes)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             handleFirestoreError(e, OperationType.DELETE, docPath)
             Result.failure(e)
         }
+    }
+
+    private companion object {
+        const val TAG = "BillingRepo"
+        const val ONLINE_ACK_TIMEOUT_MS = 3500L
+        const val OFFLINE_QUEUE_SETTLE_MS = 180L
+        const val SYNC_WAIT_TIMEOUT_MS = 8000L
     }
 }

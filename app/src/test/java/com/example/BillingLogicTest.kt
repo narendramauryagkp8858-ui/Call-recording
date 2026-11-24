@@ -273,5 +273,103 @@ class BillingLogicTest {
         assertFalse(expiredReceipt.contains("Warranty:"))
         assertFalse(expiredReceipt.contains("Valid Till:"))
     }
+
+    @Test
+    fun mobileImeiHelper_detectsPhones_combinesSplitsAndPrintsOnReceipt() {
+        assertTrue(com.example.billing.MobileImeiHelper.isLikelyMobilePhone("Vivo Y200 5G", ""))
+        assertTrue(com.example.billing.MobileImeiHelper.isLikelyMobilePhone("Smart Device", "8517"))
+        assertFalse(com.example.billing.MobileImeiHelper.isLikelyMobilePhone("Basmati Rice 25kg", "1006"))
+
+        val combined = com.example.billing.MobileImeiHelper.combineImeiNumbers("352099001761481", "352099001761482")
+        assertEquals("352099001761481 / 352099001761482", combined)
+        assertTrue(com.example.billing.MobileImeiHelper.hasStandard15DigitImei(combined))
+
+        val (imei1, imei2) = com.example.billing.MobileImeiHelper.splitImeiNumbers(combined)
+        assertEquals("352099001761481", imei1)
+        assertEquals("352099001761482", imei2)
+
+        val computed = GstCalculator.computeLine(
+            productId = "mob_1",
+            name = "Redmi Note 14 5G",
+            hsnCode = "8517",
+            unit = "PCS",
+            quantity = 1.0,
+            sellingRate = 18000.0,
+            purchaseRate = 15500.0,
+            gstRate = 18.0,
+            taxInclusive = true,
+            imeiNumber = combined
+        )
+        assertEquals(combined, computed.lineItem.imeiNumber)
+
+        val invoice = Invoice(
+            invoiceNumber = "NRB-0022",
+            shopName = "Narendra Telecom",
+            customerName = "Suresh",
+            items = listOf(computed.lineItem),
+            subtotalTaxable = computed.lineItem.taxableAmount,
+            cgstAmount = computed.lineItem.gstAmount / 2.0,
+            sgstAmount = computed.lineItem.gstAmount / 2.0,
+            totalGstAmount = computed.lineItem.gstAmount,
+            grandTotal = computed.lineItem.lineTotal,
+            estimatedProfit = computed.lineProfit
+        )
+
+        val receiptText = String(
+            ThermalPrinterManager.buildEscPosReceipt(invoice, paperWidthMm = 58),
+            Charsets.US_ASCII
+        )
+        assertTrue(receiptText.contains("IMEI: 352099001761481"))
+        assertTrue(receiptText.contains("352099001761482"))
+        // Khareed rate (15500.00) must still remain private
+        assertFalse(receiptText.contains("15500.00"))
+    }
+
+    @Test
+    fun hsnAutoFillHelper_suggestsCorrectHsnAndBuildsBatchPlan() {
+        val phone = com.example.billing.HsnAutoFillHelper.suggestHsn("Samsung Galaxy A55 5G")
+        assertEquals("8517", phone?.hsnCode)
+        assertEquals(18.0, phone?.gstRate ?: 0.0, 0.001)
+
+        // Accessory must NOT misclassify as phone
+        val cover = com.example.billing.HsnAutoFillHelper.suggestHsn("Vivo V30 Back Cover")
+        assertEquals("3926", cover?.hsnCode)
+
+        val tempered = com.example.billing.HsnAutoFillHelper.suggestHsn("Redmi Note 13 Tempered Glass")
+        assertEquals("7007", tempered?.hsnCode)
+
+        val rice = com.example.billing.HsnAutoFillHelper.suggestHsn("Basmati Rice 25kg")
+        assertEquals("1006", rice?.hsnCode)
+        assertEquals(5.0, rice?.gstRate ?: 0.0, 0.001)
+
+        // Whole-word guard: "Black Bag" should match Bag (4202), not AC (8415); "Leather Sandal" matches Footwear (6403), not Dal
+        assertEquals("4202", com.example.billing.HsnAutoFillHelper.suggestHsn("Black Laptop Bag")?.hsnCode)
+        assertEquals("6403", com.example.billing.HsnAutoFillHelper.suggestHsn("Leather Sandal")?.hsnCode)
+
+        val products = listOf(
+            com.example.data.ProductItem(id = "p1", name = "Vivo Y200 5G", hsnCode = ""),
+            com.example.data.ProductItem(id = "p2", name = "Aashirvaad Atta 10kg", hsnCode = "1101"),
+            com.example.data.ProductItem(id = "p3", name = "Custom Gift Item", hsnCode = "")
+        )
+        val missingOnlyPlan = com.example.billing.HsnAutoFillHelper.buildBatchPlan(
+            products = products,
+            overwriteExisting = false,
+            alsoUpdateGstRate = false,
+            applyDefaultIfUnmatched = false
+        )
+        assertEquals(2, missingOnlyPlan.size)
+        assertEquals("8517", missingOnlyPlan.first { it.product.id == "p1" }.suggestedHsn)
+        assertEquals("", missingOnlyPlan.first { it.product.id == "p3" }.suggestedHsn)
+
+        val withDefaultPlan = com.example.billing.HsnAutoFillHelper.buildBatchPlan(
+            products = products,
+            overwriteExisting = true,
+            alsoUpdateGstRate = true,
+            applyDefaultIfUnmatched = true
+        )
+        assertEquals(3, withDefaultPlan.size)
+        assertEquals("9997", withDefaultPlan.first { it.product.id == "p3" }.suggestedHsn)
+    }
 }
+
 

@@ -202,7 +202,11 @@ object InvoicePdfGenerator {
 
             // 4. Table Rows
             invoice.items.forEachIndexed { idx, item ->
-                val itemTitle = if (item.hsnCode.isNotBlank()) "${item.name} (HSN: ${item.hsnCode})" else item.name
+                val itemTitle = buildString {
+                    append(item.name)
+                    if (item.hsnCode.isNotBlank()) append(" (HSN: ${item.hsnCode})")
+                    if (item.imeiNumber.isNotBlank()) append("\nIMEI: ${item.imeiNumber}")
+                }
                 val nameLayout = StaticLayout.Builder.obtain(
                     itemTitle, 0, itemTitle.length, bodyPaint, 195
                 ).setAlignment(Layout.Alignment.ALIGN_NORMAL).build()
@@ -420,6 +424,12 @@ object InvoicePdfGenerator {
             append("GST Bill No: ${invoice.invoiceNumber}\n")
             append("Customer: ${invoice.customerName}\n")
             append("Grand Total: ${GstCalculator.formatRupees(invoice.grandTotal)}\n")
+            val imeiItems = invoice.items.filter { it.imeiNumber.isNotBlank() }
+            if (imeiItems.isNotEmpty()) {
+                imeiItems.take(3).forEach { item ->
+                    append("IMEI (${item.name}): ${item.imeiNumber}\n")
+                }
+            }
             if (WarrantyManager.isWarrantyActiveOnBill(invoice)) {
                 val wEval = WarrantyManager.evaluate(invoice)
                 append("Warranty: ${wEval.displayLabel} (Till ${WarrantyManager.formatExpiryDate(wEval.expiryDateMillis)})\n")

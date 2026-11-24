@@ -86,6 +86,10 @@ fun attemptAutoSignIn(
         onAuthSuccess()
         return
     }
+    if (!NetworkMonitor.isOnline(context)) {
+        onUnauthenticated()
+        return
+    }
     val clientId = try {
         context.getString(R.string.default_web_client_id).trim()
     } catch (_: Exception) {
@@ -134,6 +138,10 @@ fun onGoogleSignInClicked(
     onAuthError: (String) -> Unit,
     onAuthCancelled: (diagnostic: String) -> Unit = {}
 ) {
+    if (!NetworkMonitor.isOnline(context)) {
+        onAuthError("Internet connection is required for first-time Google Sign-In. Once signed in, Narendra Billing works offline too!")
+        return
+    }
     val clientId = try {
         context.getString(R.string.default_web_client_id).trim()
     } catch (_: Exception) {

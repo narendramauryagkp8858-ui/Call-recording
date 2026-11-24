@@ -22,7 +22,8 @@ data class EditedInvoiceLine(
     val quantity: Double,
     val sellingRate: Double,
     val gstRate: Double,
-    val taxInclusive: Boolean
+    val taxInclusive: Boolean,
+    val imeiNumber: String = ""
 )
 
 object StockManager {
@@ -125,7 +126,8 @@ object StockManager {
                 sellingRate = line.sellingRate,
                 purchaseRate = purchaseRate,
                 gstRate = line.gstRate,
-                taxInclusive = line.taxInclusive
+                taxInclusive = line.taxInclusive,
+                imeiNumber = line.imeiNumber
             )
         }
         val totals = GstCalculator.summarizeInvoice(computedLines, interState)

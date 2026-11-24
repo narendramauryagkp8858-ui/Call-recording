@@ -150,21 +150,26 @@ data class InvoiceLineItem(
     val taxInclusive: Boolean = false,
     val taxableAmount: Double = 0.0,
     val gstAmount: Double = 0.0,
-    val lineTotal: Double = 0.0
+    val lineTotal: Double = 0.0,
+    val imeiNumber: String = ""
 ) {
-    fun toMap(): Map<String, Any> = mapOf(
-        "productId" to productId.take(128),
-        "name" to name.trim().take(120),
-        "hsnCode" to hsnCode.trim().uppercase().take(20),
-        "unit" to unit.trim().ifEmpty { "PCS" }.uppercase().take(20),
-        "quantity" to quantity.coerceAtLeast(0.001),
-        "sellingRate" to sellingRate.coerceAtLeast(0.0),
-        "gstRate" to gstRate.coerceIn(0.0, 100.0),
-        "taxInclusive" to taxInclusive,
-        "taxableAmount" to taxableAmount.coerceAtLeast(0.0),
-        "gstAmount" to gstAmount.coerceAtLeast(0.0),
-        "lineTotal" to lineTotal.coerceAtLeast(0.0)
-    )
+    fun toMap(): Map<String, Any> = buildMap {
+        put("productId", productId.take(128))
+        put("name", name.trim().take(120))
+        put("hsnCode", hsnCode.trim().uppercase().take(20))
+        put("unit", unit.trim().ifEmpty { "PCS" }.uppercase().take(20))
+        put("quantity", quantity.coerceAtLeast(0.001))
+        put("sellingRate", sellingRate.coerceAtLeast(0.0))
+        put("gstRate", gstRate.coerceIn(0.0, 100.0))
+        put("taxInclusive", taxInclusive)
+        put("taxableAmount", taxableAmount.coerceAtLeast(0.0))
+        put("gstAmount", gstAmount.coerceAtLeast(0.0))
+        put("lineTotal", lineTotal.coerceAtLeast(0.0))
+        val cleanImei = imeiNumber.trim().take(80)
+        if (cleanImei.isNotEmpty()) {
+            put("imeiNumber", cleanImei)
+        }
+    }
 }
 
 enum class PaymentMode(val label: String) {

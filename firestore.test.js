@@ -208,6 +208,21 @@ test("Owner can manage products with Khareed and Bikri rates; invalid bounds rej
     })
   );
 
+  // Batch HSN auto-fill update (HSN only, and HSN + standard GST%)
+  await assertSucceeds(
+    prodRef.update({
+      hsnCode: "1006",
+      updatedAt: new Date(Date.now() - 350),
+    })
+  );
+  await assertSucceeds(
+    prodRef.update({
+      hsnCode: "100630",
+      gstRate: 5.0,
+      updatedAt: new Date(Date.now() - 325),
+    })
+  );
+
   // Negative stockQty rejected
   await assertFails(
     prodRef.update({
@@ -358,3 +373,55 @@ test("Owner can create invoice with warranty and auto-clear expired warranty wit
     })
   );
 });
+
+test("Owner can create and update mobile phone invoice with IMEI number", async () => {
+  const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
+  const created = new Date(Date.now() - 5000);
+  const invRef = aliceDb.collection("users").doc(ALICE_UID).collection("invoices").doc("inv_mobile_imei");
+
+  await assertSucceeds(
+    invRef.set({
+      ...validInvoicePayload(created),
+      items: [
+        {
+          productId: "prod_mobile_1",
+          name: "Samsung Galaxy A55 5G",
+          hsnCode: "8517",
+          unit: "PCS",
+          quantity: 1.0,
+          sellingRate: 35000.0,
+          gstRate: 18.0,
+          taxInclusive: true,
+          taxableAmount: 29661.02,
+          gstAmount: 5338.98,
+          lineTotal: 35000.0,
+          imeiNumber: "352099001761481 / 352099001761482",
+        },
+      ],
+      grandTotal: 35000.0,
+    })
+  );
+
+  await assertSucceeds(
+    invRef.update({
+      items: [
+        {
+          productId: "prod_mobile_1",
+          name: "Samsung Galaxy A55 5G",
+          hsnCode: "8517",
+          unit: "PCS",
+          quantity: 1.0,
+          sellingRate: 35000.0,
+          gstRate: 18.0,
+          taxInclusive: true,
+          taxableAmount: 29661.02,
+          gstAmount: 5338.98,
+          lineTotal: 35000.0,
+          imeiNumber: "352099001761499",
+        },
+      ],
+      updatedAt: new Date(Date.now() - 200),
+    })
+  );
+});
+

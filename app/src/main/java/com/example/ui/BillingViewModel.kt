@@ -6,12 +6,14 @@ import androidx.lifecycle.viewModelScope
 import com.example.billing.ComputedLine
 import com.example.billing.GstCalculator
 import com.example.billing.InvoiceTotals
+import com.example.billing.MobileImeiHelper
 import com.example.billing.StockStatus
 import com.example.billing.WarrantyManager
 import com.example.data.BillingRepository
 import com.example.data.Customer
 import com.example.data.Invoice
 import com.example.data.PaymentMode
+import com.example.data.ProductHsnUpdateEntry
 import com.example.data.ProductItem
 import com.example.data.ShopProfile
 import com.example.data.StockChangeNotice
@@ -45,7 +47,8 @@ data class DraftBillLine(
     val sellingRate: Double,    // Bikri Rate — shown on customer bill
     val purchaseRate: Double = 0.0, // Khareed Rate — internal profit calc only, NEVER shown on bill
     val gstRate: Double = 18.0,
-    val taxInclusive: Boolean = false
+    val taxInclusive: Boolean = false,
+    val imeiNumber: String = ""
 ) {
     fun computed(): ComputedLine = GstCalculator.computeLine(
         productId = productId,
@@ -56,7 +59,8 @@ data class DraftBillLine(
         sellingRate = sellingRate,
         purchaseRate = purchaseRate,
         gstRate = gstRate,
-        taxInclusive = taxInclusive
+        taxInclusive = taxInclusive,
+        imeiNumber = imeiNumber
     )
 }
 
@@ -89,7 +93,8 @@ data class DraftBillState(
 
 class BillingViewModel(
     private val repository: BillingRepository,
-    private val currentUserId: String
+    private val currentUserId: String,
+    private val isOnlineProvider: () -> Boolean = { true }
 ) : ViewModel() {
 
     private fun <T> Flow<List<T>>.toUiState(label: String): StateFlow<UiState<List<T>>> =
@@ -120,6 +125,16 @@ class BillingViewModel(
 
     val invoicesState: StateFlow<UiState<List<Invoice>>> =
         repository.observeInvoices(currentUserId).toUiState("invoices")
+
+    val pendingSyncCount: StateFlow<Int> =
+        repository.pendingSyncCount.stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MILLIS),
+            initialValue = 0
+        )
+
+    private val _isSyncing = MutableStateFlow(false)
+    val isSyncing: StateFlow<Boolean> = _isSyncing.asStateFlow()
 
     private val _draftBill = MutableStateFlow(DraftBillState())
     val draftBill: StateFlow<DraftBillState> = _draftBill.asStateFlow()
@@ -297,7 +312,8 @@ class BillingViewModel(
         gstRate: Double,
         taxInclusive: Boolean,
         unit: String,
-        hsnCode: String
+        hsnCode: String,
+        imeiNumber: String? = null
     ) {
         _draftBill.update { state ->
             val updated = state.lines.map { line ->
@@ -309,8 +325,19 @@ class BillingViewModel(
                     gstRate = gstRate.coerceIn(0.0, 100.0),
                     taxInclusive = taxInclusive,
                     unit = unit.trim().ifBlank { "PCS" }.uppercase(),
-                    hsnCode = hsnCode.trim().uppercase()
+                    hsnCode = hsnCode.trim().uppercase(),
+                    imeiNumber = imeiNumber?.let { MobileImeiHelper.normalizeImeiInput(it) } ?: line.imeiNumber
                 )
+            }
+            state.copy(lines = updated)
+        }
+    }
+
+    fun updateLineImei(localId: String, imeiNumber: String) {
+        val clean = MobileImeiHelper.normalizeImeiInput(imeiNumber)
+        _draftBill.update { state ->
+            val updated = state.lines.map { line ->
+                if (line.localId == localId) line.copy(imeiNumber = clean) else line
             }
             state.copy(lines = updated)
         }
@@ -418,7 +445,17 @@ class BillingViewModel(
                 )
             } else null
 
-            val result = repository.createInvoice(invoice, activeShop, newCustomer)
+            val cachedProductsById = ((productsState.value as? UiState.Success)?.data ?: emptyList())
+                .filter { it.id.isNotBlank() }
+                .associateBy { it.id }
+
+            val result = repository.createInvoice(
+                invoice = invoice,
+                shop = activeShop,
+                newCustomerIfRequested = newCustomer,
+                cachedProductsById = cachedProductsById,
+                isOnline = isOnlineProvider()
+            )
             result.onSuccess { createResult ->
                 val saved = createResult.invoice
                 _lastCreatedInvoice.value = saved
@@ -449,7 +486,8 @@ class BillingViewModel(
                     }
                     else -> ""
                 }
-                _statusMessage.value = "GST Bill ${saved.invoiceNumber} saved$stockSummary"
+                val offlineSuffix = if (createResult.queuedOffline) " (Saved offline • Will auto-sync)" else ""
+                _statusMessage.value = "GST Bill ${saved.invoiceNumber} saved$stockSummary$offlineSuffix"
             }.onFailure { err ->
                 _draftBill.update { it.copy(isSaving = false) }
                 _statusMessage.value = err.localizedMessage ?: "Failed to save invoice."
@@ -457,11 +495,36 @@ class BillingViewModel(
         }
     }
 
+    fun syncPendingChanges(showSuccessMessage: Boolean = true) {
+        if (_isSyncing.value) return
+        if (!isOnlineProvider()) {
+            if (showSuccessMessage) {
+                _statusMessage.value = "Offline mode active. Changes will auto-sync when internet connects."
+            }
+            return
+        }
+        viewModelScope.launch {
+            _isSyncing.value = true
+            repository.syncPendingWritesNow()
+                .onSuccess {
+                    if (showSuccessMessage) {
+                        _statusMessage.value = "All bills & store data synced with your cloud account."
+                    }
+                }
+                .onFailure { err ->
+                    if (showSuccessMessage) {
+                        _statusMessage.value = err.localizedMessage ?: "Sync waiting for stronger connection."
+                    }
+                }
+            _isSyncing.value = false
+        }
+    }
+
     fun saveShop(shop: ShopProfile) {
         val currentShops = (shopsState.value as? UiState.Success)?.data ?: emptyList()
         val withDefault = if (currentShops.isEmpty()) shop.copy(defaultActive = true) else shop
         viewModelScope.launch {
-            repository.saveShop(withDefault, currentShops)
+            repository.saveShop(withDefault, currentShops, isOnline = isOnlineProvider())
                 .onSuccess { newId ->
                     _draftBill.update {
                         if (it.selectedShopId.isBlank() || withDefault.defaultActive) it.copy(selectedShopId = newId) else it
@@ -475,7 +538,7 @@ class BillingViewModel(
     fun setActiveDefaultShop(shop: ShopProfile) {
         val currentShops = (shopsState.value as? UiState.Success)?.data ?: emptyList()
         viewModelScope.launch {
-            repository.saveShop(shop.copy(defaultActive = true), currentShops)
+            repository.saveShop(shop.copy(defaultActive = true), currentShops, isOnline = isOnlineProvider())
                 .onSuccess {
                     _draftBill.update { it.copy(selectedShopId = shop.id) }
                     _statusMessage.value = "${shop.shopName} set as active shop"
@@ -486,7 +549,7 @@ class BillingViewModel(
 
     fun deleteShop(shopId: String) {
         viewModelScope.launch {
-            repository.deleteShop(shopId)
+            repository.deleteShop(shopId, isOnline = isOnlineProvider())
                 .onSuccess { _statusMessage.value = "Shop deleted" }
                 .onFailure { _statusMessage.value = it.localizedMessage ?: "Failed to delete shop" }
         }
@@ -494,16 +557,41 @@ class BillingViewModel(
 
     fun saveProduct(product: ProductItem) {
         viewModelScope.launch {
-            repository.saveProduct(product)
+            repository.saveProduct(product, isOnline = isOnlineProvider())
                 .onSuccess { _statusMessage.value = "Item \"${product.name}\" saved" }
                 .onFailure { _statusMessage.value = it.localizedMessage ?: "Failed to save item" }
+        }
+    }
+
+    fun autoFillProductsHsn(updates: List<ProductHsnUpdateEntry>) {
+        if (updates.isEmpty()) {
+            _statusMessage.value = "No HSN updates to apply."
+            return
+        }
+        viewModelScope.launch {
+            val online = isOnlineProvider()
+            repository.bulkUpdateProductHsn(updates, isOnline = online)
+                .onSuccess { count ->
+                    _statusMessage.value = if (count == 0) {
+                        "No products needed HSN update."
+                    } else {
+                        val offlineNote = if (!online) " (Saved offline • Will auto-sync)" else ""
+                        "HSN auto-filled for $count ${if (count == 1) "product" else "products"}$offlineNote"
+                    }
+                }
+                .onFailure { _statusMessage.value = it.localizedMessage ?: "Failed to auto-fill HSN codes" }
         }
     }
 
     fun adjustProductStock(product: ProductItem, delta: Double) {
         if (product.id.isBlank()) return
         viewModelScope.launch {
-            repository.adjustProductStock(product.id, delta)
+            repository.adjustProductStock(
+                productId = product.id,
+                delta = delta,
+                cachedStockQty = product.stockQty,
+                isOnline = isOnlineProvider()
+            )
                 .onSuccess { newStock ->
                     val statusTag = when (com.example.billing.StockManager.getStockStatus(newStock, product.lowStockThreshold)) {
                         StockStatus.OUT_OF_STOCK -> " (Out of Stock)"
@@ -518,7 +606,7 @@ class BillingViewModel(
 
     fun deleteProduct(productId: String) {
         viewModelScope.launch {
-            repository.deleteProduct(productId)
+            repository.deleteProduct(productId, isOnline = isOnlineProvider())
                 .onSuccess { _statusMessage.value = "Item deleted" }
                 .onFailure { _statusMessage.value = it.localizedMessage ?: "Failed to delete item" }
         }
@@ -526,7 +614,7 @@ class BillingViewModel(
 
     fun saveCustomer(customer: Customer) {
         viewModelScope.launch {
-            repository.saveCustomer(customer)
+            repository.saveCustomer(customer, isOnline = isOnlineProvider())
                 .onSuccess {
                     val isUpdate = customer.id.isNotBlank()
                     _draftBill.update { state ->
@@ -553,7 +641,7 @@ class BillingViewModel(
 
     fun deleteCustomer(customerId: String) {
         viewModelScope.launch {
-            repository.deleteCustomer(customerId)
+            repository.deleteCustomer(customerId, isOnline = isOnlineProvider())
                 .onSuccess {
                     if (_draftBill.value.selectedCustomerId == customerId) {
                         clearSelectedCustomer()
@@ -572,7 +660,14 @@ class BillingViewModel(
         notes: String
     ) {
         viewModelScope.launch {
-            repository.updateInvoiceOptions(invoiceId, includeStamp, includeSignature, paymentMode, notes)
+            repository.updateInvoiceOptions(
+                invoiceId = invoiceId,
+                includeStamp = includeStamp,
+                includeSignature = includeSignature,
+                paymentMode = paymentMode,
+                notes = notes,
+                isOnline = isOnlineProvider()
+            )
                 .onSuccess { _statusMessage.value = "Bill options updated" }
                 .onFailure { _statusMessage.value = it.localizedMessage ?: "Failed to update bill" }
         }
@@ -580,7 +675,18 @@ class BillingViewModel(
 
     fun updateInvoiceWithReturn(updatedInvoice: Invoice) {
         viewModelScope.launch {
-            repository.updateInvoiceWithStockSync(updatedInvoice)
+            val cachedProductsById = ((productsState.value as? UiState.Success)?.data ?: emptyList())
+                .filter { it.id.isNotBlank() }
+                .associateBy { it.id }
+            val existingInvoice = ((invoicesState.value as? UiState.Success)?.data ?: emptyList())
+                .firstOrNull { it.id == updatedInvoice.id }
+
+            repository.updateInvoiceWithStockSync(
+                updatedInvoice = updatedInvoice,
+                existingInvoiceHint = existingInvoice,
+                cachedProductsById = cachedProductsById,
+                isOnline = isOnlineProvider()
+            )
                 .onSuccess { updateResult ->
                     val restored = updateResult.stockChanges.filter { it.delta > 0.0 }
                     val deducted = updateResult.stockChanges.filter { it.delta < 0.0 }
@@ -597,6 +703,9 @@ class BillingViewModel(
                             }
                             append(" • Stock updated: $summary")
                         }
+                        if (updateResult.queuedOffline) {
+                            append(" (Saved offline)")
+                        }
                     }
                     _statusMessage.value = msg
                 }
@@ -606,7 +715,19 @@ class BillingViewModel(
 
     fun deleteInvoice(invoiceId: String, restoreStock: Boolean = true) {
         viewModelScope.launch {
-            repository.deleteInvoice(invoiceId, restoreStock)
+            val cachedProductsById = ((productsState.value as? UiState.Success)?.data ?: emptyList())
+                .filter { it.id.isNotBlank() }
+                .associateBy { it.id }
+            val existingInvoice = ((invoicesState.value as? UiState.Success)?.data ?: emptyList())
+                .firstOrNull { it.id == invoiceId }
+
+            repository.deleteInvoice(
+                invoiceId = invoiceId,
+                restoreStock = restoreStock,
+                existingInvoiceHint = existingInvoice,
+                cachedProductsById = cachedProductsById,
+                isOnline = isOnlineProvider()
+            )
                 .onSuccess { restoredList ->
                     _statusMessage.value = if (restoreStock && restoredList.isNotEmpty()) {
                         val summary = restoredList.take(2).joinToString(", ") {
@@ -627,7 +748,7 @@ class BillingViewModel(
         if (expiredToClear.isEmpty()) return
         val ids = expiredToClear.map { it.id }
         viewModelScope.launch {
-            repository.clearExpiredWarrantiesBatch(ids)
+            repository.clearExpiredWarrantiesBatch(ids, isOnline = isOnlineProvider())
                 .onFailure {
                     attemptedWarrantyClearIds.removeAll(ids.toSet())
                 }
